@@ -1,6 +1,9 @@
 @echo off
 setlocal
 
+rem Windows 콘솔 코드페이지를 UTF-8로 전환 (한글 안내문 깨짐 방지)
+chcp 65001 >nul
+
 rem 이 배치 파일이 있는 폴더(저장소 루트)로 이동 — 어디서 더블클릭해도 동작하도록
 cd /d "%~dp0"
 
