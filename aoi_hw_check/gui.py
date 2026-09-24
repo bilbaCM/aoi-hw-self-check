@@ -25,8 +25,10 @@ from aoi_hw_check.gui_support import (
     SELECTABLE_ITEMS,
     VERDICT_COLOR,
     VERDICT_LABEL,
+    ConnectionInputs,
     advance_criteria_gate,
-    build_run_all_args,
+    build_connected_run_all_args,
+    describe_connection_inputs,
     format_action_items,
     format_criteria_row,
     format_detail_cell,
@@ -47,6 +49,7 @@ class HWSelfCheckApp(tk.Tk):
         self.minsize(760, 480)
 
         self._result_queue: queue.Queue[tuple[str, object]] = queue.Queue()
+        self._connection_inputs = ConnectionInputs()
         self._build_widgets()
 
     def _build_widgets(self) -> None:
@@ -67,6 +70,18 @@ class HWSelfCheckApp(tk.Tk):
 
         ttk.Button(top, text="기준값 Gate 관리...", command=self._open_gate_window).pack(
             side="right"
+        )
+        ttk.Button(top, text="연동 설정...", command=self._open_connection_settings).pack(
+            side="right", padx=(0, 6)
+        )
+
+        conn_bar = ttk.Frame(self, padding=(10, 0, 10, 6))
+        conn_bar.pack(fill="x")
+        self._connection_summary_var = tk.StringVar(
+            value=describe_connection_inputs(self._connection_inputs)
+        )
+        ttk.Label(conn_bar, textvariable=self._connection_summary_var, foreground="#555555").pack(
+            anchor="w"
         )
 
         body = ttk.Frame(self)
@@ -139,22 +154,34 @@ class HWSelfCheckApp(tk.Tk):
             messagebox.showwarning(PROGRAM_NAME, "실행할 항목을 하나 이상 선택하세요.")
             return
 
+        # 연동 설정(호스트/포트) 검증은 메인 스레드에서 미리 해서, 잘못된 입력이면
+        # 스레드를 띄우지도 않고 바로 알려준다 — "연동 설정..." 창에서 저장할 때도
+        # 같은 검증을 거치므로 보통은 여기서 실패하지 않는다.
+        try:
+            args = build_connected_run_all_args(equipment_id, self._connection_inputs)
+        except ValueError as exc:
+            messagebox.showwarning(PROGRAM_NAME, str(exc))
+            return
+
         self._run_button.state(["disabled"])
-        self._status_var.set(f"실행 중 (Mock, {len(selected_keys)}개 항목 선택)...")
+        self._status_var.set(
+            f"실행 중 ({len(selected_keys)}개 항목, "
+            f"{describe_connection_inputs(self._connection_inputs)})..."
+        )
         self._tree.delete(*self._tree.get_children())
         self._set_action_text("")
         self._report_var.set("")
 
         thread = threading.Thread(
-            target=self._run_in_background, args=(equipment_id, selected_keys), daemon=True
+            target=self._run_in_background, args=(equipment_id, args, selected_keys), daemon=True
         )
         thread.start()
         self.after(100, self._poll_result_queue)
 
-    def _run_in_background(self, equipment_id: str, selected_keys: set[str]) -> None:
+    def _run_in_background(self, equipment_id: str, args, selected_keys: set[str]) -> None:
         # UI 스레드를 막지 않도록 별도 스레드에서 실행하고, 결과/예외는 큐로 전달한다.
         try:
-            outcome = execute_selected(build_run_all_args(equipment_id), selected_keys)
+            outcome = execute_selected(args, selected_keys)
         except Exception as exc:  # noqa: BLE001 - GUI 스레드로 예외 메시지를 전달하기 위함
             self._result_queue.put(("error", exc))
             return
@@ -201,6 +228,13 @@ class HWSelfCheckApp(tk.Tk):
 
     def _open_gate_window(self) -> None:
         CriteriaGateWindow(self)
+
+    def _open_connection_settings(self) -> None:
+        ConnectionSettingsDialog(self, self._connection_inputs, on_saved=self._apply_connection_inputs)
+
+    def _apply_connection_inputs(self, inputs: ConnectionInputs) -> None:
+        self._connection_inputs = inputs
+        self._connection_summary_var.set(describe_connection_inputs(inputs))
 
 
 class CriteriaGateWindow(tk.Toplevel):
@@ -414,6 +448,95 @@ class EditCriteriaDialog(tk.Toplevel):
 
         self.destroy()
         self._on_saved()
+
+
+class ConnectionSettingsDialog(tk.Toplevel):
+    """실제 설비 연동(제어 프로그램/PPMAC/검사 프로그램 TCP, PC WMI) 호스트·포트를
+    입력하는 대화상자. 호스트를 비워두면 그 항목은 계속 Mock으로 실행된다 —
+    CLI의 --control-program-host 등과 동일한 규칙이다.
+    """
+
+    def __init__(self, master: tk.Misc, current: ConnectionInputs, on_saved) -> None:
+        super().__init__(master)
+        self._on_saved = on_saved
+
+        self.title("연동 설정")
+        self.transient(master)
+        self.resizable(False, False)
+        self._build_widgets(current)
+        self.grab_set()
+
+    def _build_widgets(self, current: ConnectionInputs) -> None:
+        frame = ttk.Frame(self, padding=12)
+        frame.pack(fill="both", expand=True)
+
+        ttk.Label(
+            frame,
+            text="호스트를 비워두면 그 항목은 Mock으로 실행됩니다.",
+            foreground="#555555",
+        ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
+
+        self._control_host_var = tk.StringVar(value=current.control_program_host)
+        self._control_port_var = tk.StringVar(value=current.control_program_port)
+        self._add_host_port_row(
+            frame, 1, "제어 프로그램(C#, CC-Link):", self._control_host_var, self._control_port_var
+        )
+
+        self._ppmac_host_var = tk.StringVar(value=current.ppmac_host)
+        self._ppmac_port_var = tk.StringVar(value=current.ppmac_port)
+        self._add_host_port_row(frame, 2, "PPMAC:", self._ppmac_host_var, self._ppmac_port_var)
+
+        self._inspection_host_var = tk.StringVar(value=current.inspection_program_host)
+        self._inspection_port_var = tk.StringVar(value=current.inspection_program_port)
+        self._add_host_port_row(
+            frame, 3, "검사 프로그램(C++):", self._inspection_host_var, self._inspection_port_var
+        )
+
+        self._use_wmi_var = tk.BooleanVar(value=current.use_wmi)
+        ttk.Checkbutton(
+            frame, text="PC 동작 Check: WMI로 실제 조회 (Windows 전용)", variable=self._use_wmi_var
+        ).grid(row=4, column=0, columnspan=3, sticky="w", pady=(6, 0))
+
+        buttons = ttk.Frame(frame)
+        buttons.grid(row=5, column=0, columnspan=3, sticky="e", pady=(12, 0))
+        ttk.Button(buttons, text="취소", command=self.destroy).pack(side="right")
+        ttk.Button(buttons, text="저장", command=self._on_save_clicked).pack(
+            side="right", padx=(0, 6)
+        )
+
+        self.bind("<Return>", lambda _event: self._on_save_clicked())
+        self.bind("<Escape>", lambda _event: self.destroy())
+
+    @staticmethod
+    def _add_host_port_row(
+        frame: ttk.Frame, row: int, label: str, host_var: tk.StringVar, port_var: tk.StringVar
+    ) -> None:
+        ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", pady=2)
+        ttk.Entry(frame, textvariable=host_var, width=18).grid(row=row, column=1, padx=(4, 4))
+        ttk.Entry(frame, textvariable=port_var, width=8).grid(row=row, column=2)
+
+    def _current_inputs(self) -> ConnectionInputs:
+        return ConnectionInputs(
+            control_program_host=self._control_host_var.get(),
+            control_program_port=self._control_port_var.get(),
+            ppmac_host=self._ppmac_host_var.get(),
+            ppmac_port=self._ppmac_port_var.get(),
+            inspection_program_host=self._inspection_host_var.get(),
+            inspection_program_port=self._inspection_port_var.get(),
+            use_wmi=self._use_wmi_var.get(),
+        )
+
+    def _on_save_clicked(self) -> None:
+        candidate = self._current_inputs()
+        try:
+            # 실제로 실행하진 않고, 입력값(숫자 여부/host-port 짝)만 검증한다.
+            build_connected_run_all_args("_connection_settings_validation", candidate)
+        except ValueError as exc:
+            messagebox.showerror("연동 설정", str(exc), parent=self)
+            return
+
+        self.destroy()
+        self._on_saved(candidate)
 
 
 def main() -> int:

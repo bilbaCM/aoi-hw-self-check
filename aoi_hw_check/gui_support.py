@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 
 from aoi_hw_check.cli import (
     C_CLASS_SCAN_KEY,
@@ -32,26 +33,123 @@ SELECTABLE_ITEMS: list[tuple[str, str]] = [
 ] + [(C_CLASS_SCAN_KEY, C_CLASS_SCAN_LABEL)]
 
 
-def build_run_all_args(equipment_id: str) -> argparse.Namespace:
+def build_run_all_args(
+    equipment_id: str,
+    *,
+    control_program_host: str | None = None,
+    control_program_port: int | None = None,
+    ppmac_host: str | None = None,
+    ppmac_port: int = 1025,
+    inspection_program_host: str | None = None,
+    inspection_program_port: int | None = None,
+    use_wmi: bool = False,
+) -> argparse.Namespace:
     """GUI에서 사용할 run-all 인자를 만든다 (전체 실행/선택 실행 공용).
 
     run-all의 전체 인자 집합을 그대로 만들어 두면 `cli.execute_run_all`과
     `cli.execute_selected` 모두에 넘길 수 있다 — 실행할 항목은 args가 아니라
-    호출하는 쪽에서 고르는 key 집합으로 정해진다. run.bat과 동일하게 전 항목
-    Mock, 예시 기준(`--seed-example-criteria`) 자동 등록, 설비 단동 최초 구동은
-    GUI 조작자의 감독 하에 승인된 것으로 본다(`--supervised`). 실제 설비 연동
-    (제어/PPMAC/검사 프로그램 TCP 접속, WMI)은 1차 범위 밖이며, 기본 파서의
-    나머지 옵션은 전부 기본값(Mock)을 그대로 쓴다.
+    호출하는 쪽에서 고르는 key 집합으로 정해진다. run.bat과 동일하게 예시
+    기준(`--seed-example-criteria`) 자동 등록, 설비 단동 최초 구동은 GUI
+    조작자의 감독 하에 승인된 것으로 본다(`--supervised`).
+
+    호스트를 지정한 항목만 실제 연동(CLI의 --control-program-host 등과 동일한
+    규칙 — 제어/검사 프로그램은 host+port가 모두 있어야 실제 연동, PPMAC은
+    host만 있으면 됨)을 쓰고, 나머지는 Mock으로 실행된다. 인자 없이 부르면
+    이전과 동일하게 전부 Mock이다. 입력값(숫자 여부, host/port 짝) 검증은
+    `build_connected_run_all_args`가 미리 한다 — 이 함수는 이미 검증된 값을
+    받는다고 가정한다.
     """
-    return build_parser().parse_args(
-        [
-            "run-all",
-            "--equipment-id",
-            equipment_id,
-            "--seed-example-criteria",
-            "--supervised",
+    argv = [
+        "run-all",
+        "--equipment-id",
+        equipment_id,
+        "--seed-example-criteria",
+        "--supervised",
+    ]
+    if control_program_host and control_program_port:
+        argv += [
+            "--control-program-host",
+            control_program_host,
+            "--control-program-port",
+            str(control_program_port),
         ]
-    )
+    if ppmac_host:
+        argv += ["--ppmac-host", ppmac_host, "--ppmac-port", str(ppmac_port)]
+    if inspection_program_host and inspection_program_port:
+        argv += [
+            "--inspection-program-host",
+            inspection_program_host,
+            "--inspection-program-port",
+            str(inspection_program_port),
+        ]
+    if use_wmi:
+        argv.append("--use-wmi")
+    return build_parser().parse_args(argv)
+
+
+@dataclass
+class ConnectionInputs:
+    """연동 설정 창의 입력 필드를 그대로 담는 값 객체 (전부 문자열 — Entry 위젯의
+    StringVar와 1:1로 대응). 비워두면 그 항목은 Mock으로 실행된다."""
+
+    control_program_host: str = ""
+    control_program_port: str = ""
+    ppmac_host: str = ""
+    ppmac_port: str = "1025"
+    inspection_program_host: str = ""
+    inspection_program_port: str = ""
+    use_wmi: bool = False
+
+
+def _parse_port(text: str, label: str) -> int:
+    text = text.strip()
+    if not text:
+        raise ValueError(f"{label} 포트를 입력하세요.")
+    try:
+        port = int(text)
+    except ValueError:
+        raise ValueError(f"{label} 포트는 숫자여야 합니다.") from None
+    if not 0 < port < 65536:
+        raise ValueError(f"{label} 포트는 1~65535 사이여야 합니다.")
+    return port
+
+
+def build_connected_run_all_args(equipment_id: str, inputs: ConnectionInputs) -> argparse.Namespace:
+    """연동 설정 창의 입력값으로 run-all 인자를 만든다. 호스트를 비워둔 항목은
+    Mock으로 남는다. 호스트는 입력했는데 포트가 비었거나 숫자가 아니면
+    ValueError를 낸다(메시지를 그대로 사용자에게 보여줄 수 있다).
+    """
+    kwargs: dict[str, object] = {"use_wmi": inputs.use_wmi}
+
+    if inputs.control_program_host.strip():
+        kwargs["control_program_host"] = inputs.control_program_host.strip()
+        kwargs["control_program_port"] = _parse_port(inputs.control_program_port, "제어 프로그램")
+
+    if inputs.ppmac_host.strip():
+        kwargs["ppmac_host"] = inputs.ppmac_host.strip()
+        kwargs["ppmac_port"] = _parse_port(inputs.ppmac_port or "1025", "PPMAC")
+
+    if inputs.inspection_program_host.strip():
+        kwargs["inspection_program_host"] = inputs.inspection_program_host.strip()
+        kwargs["inspection_program_port"] = _parse_port(inputs.inspection_program_port, "검사 프로그램")
+
+    return build_run_all_args(equipment_id, **kwargs)
+
+
+def describe_connection_inputs(inputs: ConnectionInputs) -> str:
+    """상단에 표시할 한 줄 요약 — 뭐가 실제 연동으로 설정돼 있는지 한눈에 보여준다."""
+    parts = []
+    if inputs.control_program_host.strip():
+        parts.append("제어 프로그램")
+    if inputs.ppmac_host.strip():
+        parts.append("PPMAC")
+    if inputs.inspection_program_host.strip():
+        parts.append("검사 프로그램")
+    if inputs.use_wmi:
+        parts.append("PC WMI")
+    if not parts:
+        return "연동: 전부 Mock"
+    return "연동: " + ", ".join(parts) + " 실기 연결"
 
 
 def format_detail_cell(result: CheckResult) -> str:

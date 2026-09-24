@@ -11,8 +11,11 @@ from aoi_hw_check.core.models import CheckResult, FieldMismatch, GateStatus, Ver
 from aoi_hw_check.core.thresholds import Criteria, JSONCriteriaStore
 from aoi_hw_check.gui_support import (
     SELECTABLE_ITEMS,
+    ConnectionInputs,
     advance_criteria_gate,
+    build_connected_run_all_args,
     build_run_all_args,
+    describe_connection_inputs,
     format_action_items,
     format_criteria_row,
     format_detail_cell,
@@ -44,6 +47,98 @@ class BuildRunAllArgsTest(unittest.TestCase):
         self.assertIsNone(args.ppmac_host)
         self.assertIsNone(args.inspection_program_host)
         self.assertFalse(args.use_wmi)
+
+    def test_uses_real_control_program_when_host_and_port_given(self) -> None:
+        args = build_run_all_args(
+            "EQ01", control_program_host="10.0.0.5", control_program_port=9000
+        )
+
+        self.assertEqual(args.control_program_host, "10.0.0.5")
+        self.assertEqual(args.control_program_port, 9000)
+        # 다른 연동은 지정하지 않았으니 그대로 Mock
+        self.assertIsNone(args.ppmac_host)
+        self.assertIsNone(args.inspection_program_host)
+
+    def test_control_program_stays_mock_if_only_host_given_without_port(self) -> None:
+        args = build_run_all_args("EQ01", control_program_host="10.0.0.5")
+
+        self.assertIsNone(args.control_program_host)
+
+    def test_ppmac_only_needs_a_host_port_defaults_to_1025(self) -> None:
+        args = build_run_all_args("EQ01", ppmac_host="10.0.0.6")
+
+        self.assertEqual(args.ppmac_host, "10.0.0.6")
+        self.assertEqual(args.ppmac_port, 1025)
+
+    def test_use_wmi_flag_passes_through(self) -> None:
+        args = build_run_all_args("EQ01", use_wmi=True)
+
+        self.assertTrue(args.use_wmi)
+
+
+class BuildConnectedRunAllArgsTest(unittest.TestCase):
+    def test_all_blank_inputs_produce_all_mock_args(self) -> None:
+        args = build_connected_run_all_args("EQ01", ConnectionInputs())
+
+        self.assertIsNone(args.control_program_host)
+        self.assertIsNone(args.ppmac_host)
+        self.assertIsNone(args.inspection_program_host)
+        self.assertFalse(args.use_wmi)
+
+    def test_filled_inputs_produce_real_connection_args(self) -> None:
+        inputs = ConnectionInputs(
+            control_program_host="10.0.0.5",
+            control_program_port="9000",
+            ppmac_host="10.0.0.6",
+            ppmac_port="1025",
+            inspection_program_host="10.0.0.7",
+            inspection_program_port="9100",
+            use_wmi=True,
+        )
+
+        args = build_connected_run_all_args("EQ01", inputs)
+
+        self.assertEqual(args.control_program_host, "10.0.0.5")
+        self.assertEqual(args.control_program_port, 9000)
+        self.assertEqual(args.ppmac_host, "10.0.0.6")
+        self.assertEqual(args.ppmac_port, 1025)
+        self.assertEqual(args.inspection_program_host, "10.0.0.7")
+        self.assertEqual(args.inspection_program_port, 9100)
+        self.assertTrue(args.use_wmi)
+
+    def test_host_without_port_raises_a_korean_error(self) -> None:
+        inputs = ConnectionInputs(control_program_host="10.0.0.5", control_program_port="")
+
+        with self.assertRaises(ValueError) as ctx:
+            build_connected_run_all_args("EQ01", inputs)
+        self.assertIn("제어 프로그램", str(ctx.exception))
+
+    def test_non_numeric_port_raises_a_korean_error(self) -> None:
+        inputs = ConnectionInputs(inspection_program_host="10.0.0.7", inspection_program_port="abc")
+
+        with self.assertRaises(ValueError) as ctx:
+            build_connected_run_all_args("EQ01", inputs)
+        self.assertIn("검사 프로그램", str(ctx.exception))
+
+    def test_out_of_range_port_is_rejected(self) -> None:
+        inputs = ConnectionInputs(ppmac_host="10.0.0.6", ppmac_port="70000")
+
+        with self.assertRaises(ValueError):
+            build_connected_run_all_args("EQ01", inputs)
+
+
+class DescribeConnectionInputsTest(unittest.TestCase):
+    def test_all_blank_describes_mock(self) -> None:
+        self.assertEqual(describe_connection_inputs(ConnectionInputs()), "연동: 전부 Mock")
+
+    def test_lists_which_integrations_are_real(self) -> None:
+        inputs = ConnectionInputs(ppmac_host="10.0.0.6", use_wmi=True)
+
+        summary = describe_connection_inputs(inputs)
+
+        self.assertIn("PPMAC", summary)
+        self.assertIn("PC WMI", summary)
+        self.assertNotIn("제어 프로그램", summary)
 
 
 class FormatDetailCellTest(unittest.TestCase):
@@ -259,6 +354,76 @@ class HWSelfCheckAppRenderTest(unittest.TestCase):
         selected = self.app._selected_item_keys()
         self.assertNotIn("pc_check", selected)
         self.assertEqual(len(selected), 7)
+
+    def test_connection_summary_starts_as_mock(self) -> None:
+        self.assertEqual(self.app._connection_summary_var.get(), "연동: 전부 Mock")
+
+    def test_applying_connection_inputs_updates_summary_and_stored_inputs(self) -> None:
+        inputs = ConnectionInputs(ppmac_host="10.0.0.6")
+
+        self.app._apply_connection_inputs(inputs)
+
+        self.assertEqual(self.app._connection_inputs, inputs)
+        self.assertIn("PPMAC", self.app._connection_summary_var.get())
+
+
+@unittest.skipUnless(_TK_APP_AVAILABLE, "tkinter 또는 디스플레이를 사용할 수 없는 환경")
+class ConnectionSettingsDialogTest(unittest.TestCase):
+    def setUp(self) -> None:
+        from aoi_hw_check.gui import HWSelfCheckApp
+
+        self.app = HWSelfCheckApp()
+
+    def tearDown(self) -> None:
+        self.app.destroy()
+
+    def _open_dialog(self, current: ConnectionInputs | None = None):
+        from aoi_hw_check.gui import ConnectionSettingsDialog
+
+        captured = {}
+        dialog = ConnectionSettingsDialog(
+            self.app, current or ConnectionInputs(), on_saved=lambda inputs: captured.update(saved=inputs)
+        )
+        return dialog, captured
+
+    def test_prefills_fields_from_current_inputs(self) -> None:
+        current = ConnectionInputs(ppmac_host="10.0.0.6", ppmac_port="1025", use_wmi=True)
+        dialog, _captured = self._open_dialog(current)
+
+        self.assertEqual(dialog._ppmac_host_var.get(), "10.0.0.6")
+        self.assertEqual(dialog._ppmac_port_var.get(), "1025")
+        self.assertTrue(dialog._use_wmi_var.get())
+        dialog.destroy()
+
+    def test_saving_valid_input_calls_on_saved_and_closes(self) -> None:
+        dialog, captured = self._open_dialog()
+
+        dialog._control_host_var.set("10.0.0.5")
+        dialog._control_port_var.set("9000")
+        dialog._on_save_clicked()
+
+        self.assertFalse(dialog.winfo_exists())
+        saved: ConnectionInputs = captured["saved"]
+        self.assertEqual(saved.control_program_host, "10.0.0.5")
+        self.assertEqual(saved.control_program_port, "9000")
+
+    def test_saving_invalid_port_shows_error_and_keeps_dialog_open(self) -> None:
+        from unittest import mock
+
+        dialog, captured = self._open_dialog()
+        dialog._control_host_var.set("10.0.0.5")
+        dialog._control_port_var.set("not-a-number")
+
+        with mock.patch("aoi_hw_check.gui.messagebox.showerror") as mock_showerror:
+            dialog._on_save_clicked()
+
+        mock_showerror.assert_called_once()
+        self.assertTrue(dialog.winfo_exists())
+        self.assertNotIn("saved", captured)
+        dialog.destroy()
+
+    def test_main_window_can_open_connection_settings(self) -> None:
+        self.app._open_connection_settings()
 
 
 @unittest.skipUnless(_TK_APP_AVAILABLE, "tkinter 또는 디스플레이를 사용할 수 없는 환경")
