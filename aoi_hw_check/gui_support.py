@@ -9,8 +9,16 @@ from __future__ import annotations
 
 import argparse
 
-from aoi_hw_check.cli import C_CLASS_SCAN_KEY, C_CLASS_SCAN_LABEL, CHECK_ITEM_SPECS, build_parser
-from aoi_hw_check.core.models import CheckResult, Verdict
+from aoi_hw_check.cli import (
+    C_CLASS_SCAN_KEY,
+    C_CLASS_SCAN_LABEL,
+    CHECK_ITEM_SPECS,
+    build_parser,
+    list_all_criteria,
+)
+from aoi_hw_check.core.gate import next_status
+from aoi_hw_check.core.models import CheckResult, GateStatus, Verdict
+from aoi_hw_check.core.thresholds import Criteria, JSONCriteriaStore
 
 VERDICT_LABEL = {Verdict.PASS: "PASS", Verdict.FAIL: "FAIL", Verdict.NA: "NA"}
 VERDICT_COLOR = {Verdict.PASS: "#1a7f37", Verdict.FAIL: "#cf222e", Verdict.NA: "#9a6700"}
@@ -64,3 +72,29 @@ def format_action_items(equipment_id: str, action_items: list[CheckResult]) -> s
     for item in action_items:
         lines.append(f"  [{item.verdict.value}] {item.check_item}: {item.detail}")
     return "\n".join(lines)
+
+
+GATE_COLUMNS = ("store", "check_item", "key", "version", "range", "gate_status", "updated_at")
+
+
+def list_criteria_rows() -> list[tuple[str, Criteria]]:
+    """Gate 관리 화면 표에 넣을 목록. (기준 파일 경로, 최신 기준) 순서쌍을
+    항목/key 순으로 정렬해서 반환한다."""
+    return sorted(list_all_criteria(), key=lambda row: (row[1].check_item, row[1].key))
+
+
+def format_criteria_row(store_path: str, criteria: Criteria) -> tuple[str, str, str, str, str, str, str]:
+    return (
+        store_path,
+        criteria.check_item,
+        criteria.key,
+        str(criteria.version),
+        f"{criteria.min_value} ~ {criteria.max_value}",
+        criteria.gate_status.value,
+        criteria.updated_at.strftime("%Y-%m-%d %H:%M:%S"),
+    )
+
+
+def advance_criteria_gate(store_path: str, check_item: str, key: str, target: GateStatus) -> Criteria:
+    """지정한 기준 파일에서 해당 기준의 Gate를 target 단계로 전진시킨다."""
+    return JSONCriteriaStore(store_path).advance_criteria_gate(check_item, key, target)

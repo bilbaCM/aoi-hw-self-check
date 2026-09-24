@@ -48,7 +48,7 @@ from aoi_hw_check.core.gate import InvalidGateTransition
 from aoi_hw_check.core.models import CheckResult, GateStatus, Verdict
 from aoi_hw_check.core.report import build_action_item_list
 from aoi_hw_check.core.storage import ResultStore, SQLiteResultStore
-from aoi_hw_check.core.thresholds import JSONCriteriaStore
+from aoi_hw_check.core.thresholds import Criteria, JSONCriteriaStore
 from aoi_hw_check.integrations.control_program.clients import (
     TCPInterlockTestRunner,
     TCPPLCTestModeClient,
@@ -79,6 +79,32 @@ INTERLOCK_EXPECTED_SEQUENCE = [
     "load_complete",
     "downstream_ack",
 ]
+
+# run-all이 쓰는 기준(Criteria) 저장 파일 전부 — execute_motion_hw_check 등의
+# 하드코딩된 파일명과 동일하다. Gate 관리 화면(list_all_criteria)이 훑어보는 대상.
+CRITERIA_STORE_FILES = [
+    "motion_hw_check_criteria.json",
+    "motion_tuning_check_criteria.json",
+    "interlock_check_criteria.json",
+    "c_class_dof_criteria.json",
+    "c_class_focus_criteria.json",
+    "c_class_flatness_criteria.json",
+    "c_class_gantry_criteria.json",
+]
+
+
+def list_all_criteria() -> list[tuple[str, Criteria]]:
+    """CRITERIA_STORE_FILES에 등록된 모든 (check_item, key)의 최신 기준을 모아온다.
+
+    각 항목에 어느 파일에서 왔는지(store_path) 같이 반환해, 나중에
+    `JSONCriteriaStore(store_path).advance_criteria_gate(...)`로 그 파일을
+    다시 열어 Gate를 전진시킬 수 있게 한다.
+    """
+    return [
+        (store_path, criteria)
+        for store_path in CRITERIA_STORE_FILES
+        for criteria in JSONCriteriaStore(store_path).list_all_latest()
+    ]
 
 
 def _add_control_program_args(subparser: argparse.ArgumentParser) -> None:

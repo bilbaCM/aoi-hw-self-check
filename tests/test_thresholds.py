@@ -53,6 +53,23 @@ class JSONCriteriaStoreTest(unittest.TestCase):
 
         self.assertEqual(criteria.gate_status, GateStatus.GENERATED)
 
+    def test_list_all_latest_is_empty_for_a_fresh_store(self) -> None:
+        self.assertEqual(self.store.list_all_latest(), [])
+
+    def test_list_all_latest_returns_one_entry_per_key_at_its_latest_version(self) -> None:
+        self.store.save_criteria(CHECK_ITEM, "X.encoder_count", 90000, 110000)
+        self.store.save_criteria(CHECK_ITEM, "X.encoder_count", 95000, 105000)
+        self.store.save_criteria(CHECK_ITEM, "Y.pwm_duty_percent", 30, 60)
+
+        all_latest = {c.key: c for c in self.store.list_all_latest()}
+
+        self.assertEqual(set(all_latest), {"X.encoder_count", "Y.pwm_duty_percent"})
+        self.assertEqual(all_latest["X.encoder_count"].version, 2)
+        self.assertEqual(
+            (all_latest["X.encoder_count"].min_value, all_latest["X.encoder_count"].max_value),
+            (95000, 105000),
+        )
+
 
 class CriteriaGateTest(unittest.TestCase):
     def setUp(self) -> None:

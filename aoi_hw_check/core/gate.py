@@ -31,3 +31,11 @@ def transition(current: GateStatus, target: GateStatus) -> GateStatus:
             f"(한 단계씩만 전진 가능: {' -> '.join(s.value for s in _ORDER)})"
         )
     return target
+
+
+def next_status(current: GateStatus) -> GateStatus | None:
+    """current 바로 다음 단계를 반환한다. 이미 마지막 단계(APPLIED)면 None."""
+    index = _ORDER.index(current)
+    if index + 1 >= len(_ORDER):
+        return None
+    return _ORDER[index + 1]

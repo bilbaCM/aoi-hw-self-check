@@ -21,12 +21,17 @@ from aoi_hw_check.cli import RunAllOutcome, execute_selected
 from aoi_hw_check.cli_output import PROGRAM_NAME
 from aoi_hw_check.gui_support import (
     DEFAULT_EQUIPMENT_ID,
+    GATE_COLUMNS,
     SELECTABLE_ITEMS,
     VERDICT_COLOR,
     VERDICT_LABEL,
+    advance_criteria_gate,
     build_run_all_args,
     format_action_items,
+    format_criteria_row,
     format_detail_cell,
+    list_criteria_rows,
+    next_status,
 )
 
 
@@ -57,6 +62,10 @@ class HWSelfCheckApp(tk.Tk):
 
         self._status_var = tk.StringVar(value="대기 중")
         ttk.Label(top, textvariable=self._status_var).pack(side="left", padx=12)
+
+        ttk.Button(top, text="기준값 Gate 관리...", command=self._open_gate_window).pack(
+            side="right"
+        )
 
         body = ttk.Frame(self)
         body.pack(fill="both", expand=True, padx=10, pady=(0, 10))
@@ -187,6 +196,127 @@ class HWSelfCheckApp(tk.Tk):
         self._action_text.delete("1.0", "end")
         self._action_text.insert("1.0", content)
         self._action_text.configure(state="disabled")
+
+    def _open_gate_window(self) -> None:
+        CriteriaGateWindow(self)
+
+
+class CriteriaGateWindow(tk.Toplevel):
+    """기준(Criteria) 목록을 보고 Gate 상태를 한 단계씩 전진시키는 별도 창.
+
+    값(min/max)은 여기서 바꾸지 않는다 — 성숙도(Gate)만 다룬다. 값 수정은
+    설정 파일(JSON)을 직접 고치거나 각 항목을 다시 실행해 새 버전을
+    만드는 방식으로 하도록 남겨둔다 (core/thresholds.py의 설계 그대로).
+    """
+
+    def __init__(self, master: tk.Misc) -> None:
+        super().__init__(master)
+        self.title("기준값 Gate 관리")
+        self.geometry("900x480")
+        self.transient(master)
+
+        self._rows: list[tuple[str, object]] = []  # (store_path, Criteria) — 선택된 항목 조회용
+        self._build_widgets()
+        self._reload()
+
+    def _build_widgets(self) -> None:
+        top = ttk.Frame(self, padding=10)
+        top.pack(fill="x")
+        ttk.Label(
+            top,
+            text="값(min/max)은 여기서 바꾸지 않습니다. 선택한 기준의 Gate만 다음 단계로 전진시킵니다.",
+            foreground="#555555",
+        ).pack(side="left")
+        ttk.Button(top, text="새로고침", command=self._reload).pack(side="right")
+
+        self._tree = ttk.Treeview(self, columns=GATE_COLUMNS, show="headings", height=15)
+        headings = {
+            "store": "기준 파일",
+            "check_item": "항목",
+            "key": "Key",
+            "version": "버전",
+            "range": "범위",
+            "gate_status": "Gate 상태",
+            "updated_at": "수정 시각",
+        }
+        widths = {
+            "store": 190,
+            "check_item": 150,
+            "key": 150,
+            "version": 50,
+            "range": 140,
+            "gate_status": 90,
+            "updated_at": 140,
+        }
+        for column in GATE_COLUMNS:
+            self._tree.heading(column, text=headings[column])
+            self._tree.column(column, width=widths[column], anchor="w", stretch=False)
+        self._tree.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        self._tree.bind("<<TreeviewSelect>>", lambda _event: self._update_advance_button())
+
+        bottom = ttk.Frame(self, padding=(10, 0, 10, 10))
+        bottom.pack(fill="x")
+        self._advance_button = ttk.Button(
+            bottom, text="다음 단계로 전진", command=self._on_advance_clicked, state="disabled"
+        )
+        self._advance_button.pack(side="left")
+
+    def _reload(self) -> None:
+        self._tree.delete(*self._tree.get_children())
+        self._rows = list_criteria_rows()
+        for store_path, criteria in self._rows:
+            self._tree.insert("", "end", values=format_criteria_row(store_path, criteria))
+        self._update_advance_button()
+
+    def _selected_row(self):
+        selection = self._tree.selection()
+        if not selection:
+            return None
+        index = self._tree.index(selection[0])
+        return self._rows[index]
+
+    def _update_advance_button(self) -> None:
+        selected = self._selected_row()
+        if selected is None:
+            self._advance_button.state(["disabled"])
+            self._advance_button.configure(text="다음 단계로 전진")
+            return
+
+        _store_path, criteria = selected
+        target = next_status(criteria.gate_status)
+        if target is None:
+            self._advance_button.state(["disabled"])
+            self._advance_button.configure(text="이미 최종 단계(APPLIED)")
+        else:
+            self._advance_button.state(["!disabled"])
+            self._advance_button.configure(text=f"{target.value}(으)로 전진")
+
+    def _on_advance_clicked(self) -> None:
+        selected = self._selected_row()
+        if selected is None:
+            return
+        store_path, criteria = selected
+        target = next_status(criteria.gate_status)
+        if target is None:
+            return
+
+        confirmed = messagebox.askyesno(
+            "기준값 Gate 관리",
+            f"{criteria.check_item} / {criteria.key}의 Gate를 "
+            f"{criteria.gate_status.value} → {target.value}(으)로 전진시키겠습니까?\n"
+            "이 동작은 되돌릴 수 없습니다 (역행 불가).",
+            parent=self,
+        )
+        if not confirmed:
+            return
+
+        try:
+            advance_criteria_gate(store_path, criteria.check_item, criteria.key, target)
+        except Exception as exc:  # noqa: BLE001 - 사용자에게 그대로 원인을 보여주기 위함
+            messagebox.showerror("기준값 Gate 관리", f"Gate 전진에 실패했습니다:\n{exc}", parent=self)
+            return
+
+        self._reload()
 
 
 def main() -> int:

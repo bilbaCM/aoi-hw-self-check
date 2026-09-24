@@ -43,6 +43,13 @@ class CriteriaStore(ABC):
     def list_criteria_history(self, check_item: str, key: str) -> list[Criteria]: ...
 
     @abstractmethod
+    def list_all_latest(self) -> list[Criteria]:
+        """이 저장소에 등록된 모든 (check_item, key)의 최신 버전 기준을 반환한다.
+
+        Gate 관리 화면처럼 저장소 하나에 뭐가 등록돼 있는지 훑어볼 때 쓴다.
+        """
+
+    @abstractmethod
     def advance_criteria_gate(
         self, check_item: str, key: str, target_status: GateStatus
     ) -> Criteria:
@@ -101,6 +108,15 @@ class JSONCriteriaStore(CriteriaStore):
     def list_criteria_history(self, check_item: str, key: str) -> list[Criteria]:
         history = self._load().get(self._record_key(check_item, key), [])
         return [self._to_criteria(check_item, key, entry) for entry in history]
+
+    def list_all_latest(self) -> list[Criteria]:
+        results = []
+        for record_key, history in self._load().items():
+            if not history:
+                continue
+            check_item, key = record_key.split("::", 1)
+            results.append(self._to_criteria(check_item, key, history[-1]))
+        return results
 
     def advance_criteria_gate(
         self, check_item: str, key: str, target_status: GateStatus
