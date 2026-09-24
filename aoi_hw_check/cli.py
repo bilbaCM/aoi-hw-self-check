@@ -45,6 +45,11 @@ from aoi_hw_check.integrations.control_program.clients import (
     TCPSingleUnitSequenceRunner,
 )
 from aoi_hw_check.integrations.control_program.connection import ControlProgramConnection
+from aoi_hw_check.integrations.inspection_program.clients import (
+    TCPOpticalCommCollector,
+    TCPScanCollector,
+)
+from aoi_hw_check.integrations.inspection_program.connection import InspectionProgramConnection
 from aoi_hw_check.integrations.ppmac.axis_map import load_axis_variable_map
 from aoi_hw_check.integrations.ppmac.connection import PmacAsciiConnection
 from aoi_hw_check.integrations.ppmac.motion_hw_collector import PPMACMotionHWCollector
@@ -95,6 +100,27 @@ def _ppmac_connection(args: argparse.Namespace) -> PmacAsciiConnection | None:
     return None
 
 
+def _add_inspection_program_args(subparser: argparse.ArgumentParser) -> None:
+    """C++ 검사 프로그램(카메라·조명·AF 보유)과의 TCP 연동 옵션. 둘 다 지정하면
+    실제 TCP 클라이언트를, 아니면 Mock을 사용한다."""
+    subparser.add_argument(
+        "--inspection-program-host",
+        default=None,
+        help="C++ 검사 프로그램 TCP 호스트 (미지정 시 Mock 사용)",
+    )
+    subparser.add_argument("--inspection-program-port", type=int, default=None)
+
+
+def _inspection_program_connection(
+    args: argparse.Namespace,
+) -> InspectionProgramConnection | None:
+    if args.inspection_program_host and args.inspection_program_port:
+        return InspectionProgramConnection(
+            args.inspection_program_host, args.inspection_program_port
+        )
+    return None
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="aoi-hw-check")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -122,6 +148,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     optical_check.add_argument("--equipment-id", required=True)
     optical_check.add_argument("--db", default="aoi_hw_check.sqlite3")
+    _add_inspection_program_args(optical_check)
 
     io_check = subparsers.add_parser("io-check", help="I/O Check 실행")
     io_check.add_argument("--equipment-id", required=True)
@@ -185,6 +212,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="개발/테스트용 예시 기준(DOF/초점비율/평탄도/직각도)을 등록한 뒤 실행",
     )
     c_class_scan.add_argument("--max-scan-attempts", type=int, default=3)
+    _add_inspection_program_args(c_class_scan)
 
     motion_tuning_check = subparsers.add_parser(
         "motion-tuning-check", help="모션 Tuning 상태 확인 실행"
@@ -247,9 +275,13 @@ def main(argv: list[str] | None = None) -> int:
         result = run_motion_hw_check(collector, criteria_store, store, args.equipment_id)
     elif args.command == "optical-comm-check":
         store = SQLiteResultStore(args.db)
-        result = run_optical_comm_check(
-            MockOpticalCommCollector(), store, args.equipment_id
+        inspection_connection = _inspection_program_connection(args)
+        collector = (
+            TCPOpticalCommCollector(inspection_connection)
+            if inspection_connection
+            else MockOpticalCommCollector()
         )
+        result = run_optical_comm_check(collector, store, args.equipment_id)
     elif args.command == "io-check":
         store = SQLiteResultStore(args.db)
         dangerous_ids = load_dangerous_io_ids(args.danger_list)
@@ -315,8 +347,14 @@ def main(argv: list[str] | None = None) -> int:
             seed_example_focus_criteria(focus_store)
             seed_example_flatness_criteria(flatness_store)
             seed_example_gantry_criteria(gantry_store)
+        inspection_connection = _inspection_program_connection(args)
+        scan_collector = (
+            TCPScanCollector(inspection_connection)
+            if inspection_connection
+            else MockScanCollector()
+        )
         outcome = run_c_class_pipeline(
-            MockScanCollector(),
+            scan_collector,
             dof_store,
             focus_store,
             flatness_store,
