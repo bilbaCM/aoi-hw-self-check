@@ -39,6 +39,12 @@ from aoi_hw_check.core.models import CheckResult, GateStatus, Verdict
 from aoi_hw_check.core.report import build_action_item_list
 from aoi_hw_check.core.storage import SQLiteResultStore
 from aoi_hw_check.core.thresholds import JSONCriteriaStore
+from aoi_hw_check.integrations.control_program.clients import (
+    TCPInterlockTestRunner,
+    TCPPLCTestModeClient,
+    TCPSingleUnitSequenceRunner,
+)
+from aoi_hw_check.integrations.control_program.connection import ControlProgramConnection
 
 INTERLOCK_EXPECTED_SEQUENCE = [
     "upstream_ready",
@@ -46,6 +52,23 @@ INTERLOCK_EXPECTED_SEQUENCE = [
     "load_complete",
     "downstream_ack",
 ]
+
+
+def _add_control_program_args(subparser: argparse.ArgumentParser) -> None:
+    """C# 제어 프로그램(CC-Link 마스터 보유)과의 TCP 연동 옵션. 둘 다 지정하면
+    실제 TCP 클라이언트를, 아니면 Mock을 사용한다."""
+    subparser.add_argument(
+        "--control-program-host",
+        default=None,
+        help="C# 제어 프로그램 TCP 호스트 (미지정 시 Mock 사용)",
+    )
+    subparser.add_argument("--control-program-port", type=int, default=None)
+
+
+def _control_program_connection(args: argparse.Namespace) -> ControlProgramConnection | None:
+    if args.control_program_host and args.control_program_port:
+        return ControlProgramConnection(args.control_program_host, args.control_program_port)
+    return None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -85,6 +108,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="작업자가 확인·승인한 위험 출력 io_id 목록 (쉼표로 구분)",
     )
+    _add_control_program_args(io_check)
 
     single_unit_check = subparsers.add_parser(
         "single-unit-check", help="설비 단동 동작 확인 실행"
@@ -96,6 +120,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="최초 구동을 작업자가 감독하며 승인했음을 명시",
     )
+    _add_control_program_args(single_unit_check)
 
     interlock_check = subparsers.add_parser(
         "interlock-check", help="설비 연동 동작 Test 실행"
@@ -108,6 +133,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="개발/테스트용 예시 지연 기준을 등록한 뒤 실행 (실제 운영 로그 실측치 아님)",
     )
+    _add_control_program_args(interlock_check)
 
     action_items = subparsers.add_parser(
         "action-items", help="셋업 착수 전 조치 대상 목록 출력"
@@ -194,8 +220,10 @@ def main(argv: list[str] | None = None) -> int:
         approved_ids = {
             io_id.strip() for io_id in args.approve_dangerous.split(",") if io_id.strip()
         }
+        connection = _control_program_connection(args)
+        client = TCPPLCTestModeClient(connection) if connection else MockPLCTestModeClient()
         result = run_io_check(
-            MockPLCTestModeClient(),
+            client,
             DEFAULT_IO_MAP,
             dangerous_ids,
             approved_ids,
@@ -204,8 +232,14 @@ def main(argv: list[str] | None = None) -> int:
         )
     elif args.command == "single-unit-check":
         store = SQLiteResultStore(args.db)
+        connection = _control_program_connection(args)
+        runner = (
+            TCPSingleUnitSequenceRunner(connection)
+            if connection
+            else MockSingleUnitSequenceRunner()
+        )
         result = run_single_unit_check(
-            MockSingleUnitSequenceRunner(),
+            runner,
             store,
             args.equipment_id,
             supervised=args.supervised,
@@ -215,8 +249,10 @@ def main(argv: list[str] | None = None) -> int:
         criteria_store = JSONCriteriaStore(args.criteria)
         if args.seed_example_criteria:
             seed_example_interlock_criteria(criteria_store)
+        connection = _control_program_connection(args)
+        runner = TCPInterlockTestRunner(connection) if connection else MockInterlockTestRunner()
         result = run_interlock_check(
-            MockInterlockTestRunner(),
+            runner,
             INTERLOCK_EXPECTED_SEQUENCE,
             criteria_store,
             store,
