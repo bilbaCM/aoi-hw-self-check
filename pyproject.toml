@@ -1,0 +1,12 @@
+[project]
+name = "aoi-hw-check"
+version = "0.1.0"
+description = "A2 GVR AOI 검사기 H/W Self-Check 자동화 프로그램"
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+include = ["aoi_hw_check*"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
