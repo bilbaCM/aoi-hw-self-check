@@ -98,3 +98,30 @@ def format_criteria_row(store_path: str, criteria: Criteria) -> tuple[str, str, 
 def advance_criteria_gate(store_path: str, check_item: str, key: str, target: GateStatus) -> Criteria:
     """지정한 기준 파일에서 해당 기준의 Gate를 target 단계로 전진시킨다."""
     return JSONCriteriaStore(store_path).advance_criteria_gate(check_item, key, target)
+
+
+def parse_min_max(min_text: str, max_text: str) -> tuple[float, float]:
+    """입력 문자열을 (min_value, max_value)로 검증·변환한다.
+
+    숫자가 아니거나 최소값이 최대값보다 작지 않으면 사용자에게 그대로 보여줄
+    수 있는 한국어 메시지로 ValueError를 낸다.
+    """
+    try:
+        min_value = float(min_text)
+        max_value = float(max_text)
+    except ValueError as exc:
+        raise ValueError("최소값/최대값은 숫자여야 합니다.") from exc
+    if min_value >= max_value:
+        raise ValueError("최소값은 최대값보다 작아야 합니다.")
+    return min_value, max_value
+
+
+def save_criteria_value(
+    store_path: str, check_item: str, key: str, min_value: float, max_value: float
+) -> Criteria:
+    """기준값을 새 버전으로 등록한다 (GENERATED 상태로 시작).
+
+    core/thresholds.py의 설계대로, 값이 바뀌면 기존 Gate 단계는 유지되지 않고
+    처음부터 다시 검증을 거쳐야 한다 — 여기서도 그 원칙을 그대로 따른다.
+    """
+    return JSONCriteriaStore(store_path).save_criteria(check_item, key, min_value, max_value)

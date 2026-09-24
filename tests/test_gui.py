@@ -17,6 +17,8 @@ from aoi_hw_check.gui_support import (
     format_criteria_row,
     format_detail_cell,
     list_criteria_rows,
+    parse_min_max,
+    save_criteria_value,
 )
 
 
@@ -144,6 +146,37 @@ class GateManagementFileIOTest(unittest.TestCase):
         self.assertEqual(advanced.gate_status, GateStatus.TRIAL)
         reloaded = JSONCriteriaStore(store_path).get_criteria("모션 H/W Check", "X.encoder_count")
         self.assertEqual(reloaded.gate_status, GateStatus.TRIAL)
+
+    def test_save_criteria_value_registers_a_new_version_reset_to_generated(self) -> None:
+        store_path = CRITERIA_STORE_FILES[0]
+        store = JSONCriteriaStore(store_path)
+        store.save_criteria("모션 H/W Check", "X.encoder_count", 90000, 110000)
+        store.advance_criteria_gate("모션 H/W Check", "X.encoder_count", GateStatus.TRIAL)
+
+        updated = save_criteria_value(store_path, "모션 H/W Check", "X.encoder_count", 95000, 105000)
+
+        self.assertEqual((updated.min_value, updated.max_value), (95000, 105000))
+        self.assertEqual(updated.version, 2)
+        self.assertEqual(updated.gate_status, GateStatus.GENERATED)
+        reloaded = JSONCriteriaStore(store_path).get_criteria("모션 H/W Check", "X.encoder_count")
+        self.assertEqual((reloaded.min_value, reloaded.max_value), (95000, 105000))
+        self.assertEqual(reloaded.gate_status, GateStatus.GENERATED)
+
+
+class ParseMinMaxTest(unittest.TestCase):
+    def test_parses_valid_numbers(self) -> None:
+        self.assertEqual(parse_min_max("90000", "110000"), (90000.0, 110000.0))
+        self.assertEqual(parse_min_max("-0.05", "0.05"), (-0.05, 0.05))
+
+    def test_rejects_non_numeric_input(self) -> None:
+        with self.assertRaises(ValueError):
+            parse_min_max("abc", "110000")
+
+    def test_rejects_min_greater_than_or_equal_to_max(self) -> None:
+        with self.assertRaises(ValueError):
+            parse_min_max("110000", "90000")
+        with self.assertRaises(ValueError):
+            parse_min_max("100", "100")
 
 
 def _tk_app_available() -> bool:
@@ -333,7 +366,7 @@ class CriteriaGateWindowTest(unittest.TestCase):
         row_id = window._tree.get_children()[0]
 
         window._tree.selection_set(row_id)
-        window._update_advance_button()
+        window._update_buttons()
 
         self.assertNotIn("disabled", window._advance_button.state())
         self.assertIn("TRIAL", window._advance_button.cget("text"))
@@ -347,10 +380,24 @@ class CriteriaGateWindowTest(unittest.TestCase):
         window = self._open_window()
         row_id = window._tree.get_children()[0]
         window._tree.selection_set(row_id)
-        window._update_advance_button()
+        window._update_buttons()
 
         self.assertIn("disabled", window._advance_button.state())
         self.assertIn("APPLIED", window._advance_button.cget("text"))
+
+    def test_edit_button_enabled_for_any_selected_row_including_applied(self) -> None:
+        store = JSONCriteriaStore(CRITERIA_STORE_FILES[0])
+        store.save_criteria("모션 H/W Check", "X.encoder_count", 90000, 110000)
+        for target in (GateStatus.TRIAL, GateStatus.OPTIMIZED, GateStatus.VALIDATED, GateStatus.APPLIED):
+            store.advance_criteria_gate("모션 H/W Check", "X.encoder_count", target)
+
+        window = self._open_window()
+        row_id = window._tree.get_children()[0]
+        window._tree.selection_set(row_id)
+        window._update_buttons()
+
+        # 값 수정은 Gate 단계와 무관하게 항상 가능해야 한다 (APPLIED라도 재조정할 수 있음)
+        self.assertNotIn("disabled", window._edit_button.state())
 
     def test_confirmed_advance_updates_the_underlying_file_and_refreshes_the_table(self) -> None:
         from unittest import mock
@@ -361,7 +408,7 @@ class CriteriaGateWindowTest(unittest.TestCase):
         window = self._open_window()
         row_id = window._tree.get_children()[0]
         window._tree.selection_set(row_id)
-        window._update_advance_button()
+        window._update_buttons()
 
         with mock.patch("aoi_hw_check.gui.messagebox.askyesno", return_value=True):
             window._on_advance_clicked()
@@ -382,7 +429,7 @@ class CriteriaGateWindowTest(unittest.TestCase):
         window = self._open_window()
         row_id = window._tree.get_children()[0]
         window._tree.selection_set(row_id)
-        window._update_advance_button()
+        window._update_buttons()
 
         with mock.patch("aoi_hw_check.gui.messagebox.askyesno", return_value=False):
             window._on_advance_clicked()
@@ -394,6 +441,91 @@ class CriteriaGateWindowTest(unittest.TestCase):
 
     def test_main_window_can_open_the_gate_management_window(self) -> None:
         self.app._open_gate_window()
+
+    def test_edit_button_opens_a_dialog_prefilled_with_current_values(self) -> None:
+        JSONCriteriaStore(CRITERIA_STORE_FILES[0]).save_criteria(
+            "모션 H/W Check", "X.encoder_count", 90000, 110000
+        )
+        window = self._open_window()
+        row_id = window._tree.get_children()[0]
+        window._tree.selection_set(row_id)
+        window._update_buttons()
+
+        window._on_edit_clicked()
+
+        from aoi_hw_check.gui import EditCriteriaDialog
+
+        dialogs = [c for c in window.winfo_children() if isinstance(c, EditCriteriaDialog)]
+        self.assertEqual(len(dialogs), 1)
+        dialog = dialogs[0]
+        self.assertEqual(dialog._min_var.get(), "90000")
+        self.assertEqual(dialog._max_var.get(), "110000")
+        dialog.destroy()
+
+    def test_tree_has_a_double_click_binding_wired_to_edit(self) -> None:
+        # Tk은 "Double-1" 같은 합성(synthetic) 이벤트는 event_generate로 직접
+        # 재현할 수 없어(TclError: Double modifier not allowed) 실제 더블클릭
+        # 타이밍을 흉내낼 수 없다 — 여기서는 바인딩 자체가 등록됐는지만
+        # 확인하고, 열리는 동작 자체는 버튼 클릭 경로(_on_edit_clicked)로
+        # 이미 검증한다.
+        window = self._open_window()
+        self.assertTrue(window._tree.bind("<Double-1>"))
+
+    def test_saving_valid_values_registers_a_new_version_and_refreshes_the_table(self) -> None:
+        JSONCriteriaStore(CRITERIA_STORE_FILES[0]).save_criteria(
+            "모션 H/W Check", "X.encoder_count", 90000, 110000
+        )
+        window = self._open_window()
+        row_id = window._tree.get_children()[0]
+        window._tree.selection_set(row_id)
+        window._on_edit_clicked()
+
+        from aoi_hw_check.gui import EditCriteriaDialog
+
+        dialog = [c for c in window.winfo_children() if isinstance(c, EditCriteriaDialog)][0]
+        dialog._min_var.set("95000")
+        dialog._max_var.set("105000")
+        dialog._on_save_clicked()
+
+        reloaded = JSONCriteriaStore(CRITERIA_STORE_FILES[0]).get_criteria(
+            "모션 H/W Check", "X.encoder_count"
+        )
+        self.assertEqual((reloaded.min_value, reloaded.max_value), (95000, 105000))
+        self.assertEqual(reloaded.version, 2)
+        self.assertEqual(reloaded.gate_status, GateStatus.GENERATED)
+        # 저장 후 대화상자는 닫히고, 뒤에 있던 표는 새로고침되어야 한다
+        self.assertFalse(dialog.winfo_exists())
+        row_values = window._tree.item(window._tree.get_children()[0], "values")
+        self.assertEqual(row_values[3], "2")
+        self.assertEqual(row_values[5], "GENERATED")
+
+    def test_saving_invalid_values_shows_an_error_and_keeps_the_dialog_open(self) -> None:
+        from unittest import mock
+
+        JSONCriteriaStore(CRITERIA_STORE_FILES[0]).save_criteria(
+            "모션 H/W Check", "X.encoder_count", 90000, 110000
+        )
+        window = self._open_window()
+        row_id = window._tree.get_children()[0]
+        window._tree.selection_set(row_id)
+        window._on_edit_clicked()
+
+        from aoi_hw_check.gui import EditCriteriaDialog
+
+        dialog = [c for c in window.winfo_children() if isinstance(c, EditCriteriaDialog)][0]
+        dialog._min_var.set("110000")
+        dialog._max_var.set("90000")  # 최소값이 최대값보다 커서 거부되어야 함
+
+        with mock.patch("aoi_hw_check.gui.messagebox.showerror") as mock_showerror:
+            dialog._on_save_clicked()
+
+        mock_showerror.assert_called_once()
+        self.assertTrue(dialog.winfo_exists())
+        reloaded = JSONCriteriaStore(CRITERIA_STORE_FILES[0]).get_criteria(
+            "모션 H/W Check", "X.encoder_count"
+        )
+        self.assertEqual(reloaded.version, 1)
+        dialog.destroy()
 
 
 if __name__ == "__main__":

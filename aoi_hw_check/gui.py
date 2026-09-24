@@ -32,6 +32,8 @@ from aoi_hw_check.gui_support import (
     format_detail_cell,
     list_criteria_rows,
     next_status,
+    parse_min_max,
+    save_criteria_value,
 )
 
 
@@ -202,11 +204,12 @@ class HWSelfCheckApp(tk.Tk):
 
 
 class CriteriaGateWindow(tk.Toplevel):
-    """기준(Criteria) 목록을 보고 Gate 상태를 한 단계씩 전진시키는 별도 창.
+    """기준(Criteria) 목록을 보고, 값(min/max)을 고치거나 Gate 상태를 한
+    단계씩 전진시키는 별도 창.
 
-    값(min/max)은 여기서 바꾸지 않는다 — 성숙도(Gate)만 다룬다. 값 수정은
-    설정 파일(JSON)을 직접 고치거나 각 항목을 다시 실행해 새 버전을
-    만드는 방식으로 하도록 남겨둔다 (core/thresholds.py의 설계 그대로).
+    값을 고치면 core/thresholds.py의 설계대로 새 버전이 GENERATED 상태로
+    등록된다 — 기존 Gate 단계는 유지되지 않고 처음부터 다시 검증을 거쳐야
+    한다(값이 바뀌었으니 당연하다).
     """
 
     def __init__(self, master: tk.Misc) -> None:
@@ -224,7 +227,7 @@ class CriteriaGateWindow(tk.Toplevel):
         top.pack(fill="x")
         ttk.Label(
             top,
-            text="값(min/max)은 여기서 바꾸지 않습니다. 선택한 기준의 Gate만 다음 단계로 전진시킵니다.",
+            text="행을 고르고 값을 수정하거나 Gate를 다음 단계로 전진시키세요 (더블클릭으로도 값 수정).",
             foreground="#555555",
         ).pack(side="left")
         ttk.Button(top, text="새로고침", command=self._reload).pack(side="right")
@@ -252,21 +255,26 @@ class CriteriaGateWindow(tk.Toplevel):
             self._tree.heading(column, text=headings[column])
             self._tree.column(column, width=widths[column], anchor="w", stretch=False)
         self._tree.pack(fill="both", expand=True, padx=10, pady=(0, 10))
-        self._tree.bind("<<TreeviewSelect>>", lambda _event: self._update_advance_button())
+        self._tree.bind("<<TreeviewSelect>>", lambda _event: self._update_buttons())
+        self._tree.bind("<Double-1>", lambda _event: self._on_edit_clicked())
 
         bottom = ttk.Frame(self, padding=(10, 0, 10, 10))
         bottom.pack(fill="x")
+        self._edit_button = ttk.Button(
+            bottom, text="값 수정...", command=self._on_edit_clicked, state="disabled"
+        )
+        self._edit_button.pack(side="left")
         self._advance_button = ttk.Button(
             bottom, text="다음 단계로 전진", command=self._on_advance_clicked, state="disabled"
         )
-        self._advance_button.pack(side="left")
+        self._advance_button.pack(side="left", padx=(6, 0))
 
     def _reload(self) -> None:
         self._tree.delete(*self._tree.get_children())
         self._rows = list_criteria_rows()
         for store_path, criteria in self._rows:
             self._tree.insert("", "end", values=format_criteria_row(store_path, criteria))
-        self._update_advance_button()
+        self._update_buttons()
 
     def _selected_row(self):
         selection = self._tree.selection()
@@ -275,14 +283,17 @@ class CriteriaGateWindow(tk.Toplevel):
         index = self._tree.index(selection[0])
         return self._rows[index]
 
-    def _update_advance_button(self) -> None:
+    def _update_buttons(self) -> None:
         selected = self._selected_row()
         if selected is None:
+            self._edit_button.state(["disabled"])
             self._advance_button.state(["disabled"])
             self._advance_button.configure(text="다음 단계로 전진")
             return
 
         _store_path, criteria = selected
+        self._edit_button.state(["!disabled"])
+
         target = next_status(criteria.gate_status)
         if target is None:
             self._advance_button.state(["disabled"])
@@ -290,6 +301,13 @@ class CriteriaGateWindow(tk.Toplevel):
         else:
             self._advance_button.state(["!disabled"])
             self._advance_button.configure(text=f"{target.value}(으)로 전진")
+
+    def _on_edit_clicked(self) -> None:
+        selected = self._selected_row()
+        if selected is None:
+            return
+        store_path, criteria = selected
+        EditCriteriaDialog(self, store_path, criteria, on_saved=self._reload)
 
     def _on_advance_clicked(self) -> None:
         selected = self._selected_row()
@@ -317,6 +335,85 @@ class CriteriaGateWindow(tk.Toplevel):
             return
 
         self._reload()
+
+
+class EditCriteriaDialog(tk.Toplevel):
+    """선택한 기준의 min/max 값을 고쳐 새 버전으로 등록하는 모달 대화상자.
+
+    저장하면 core/thresholds.py의 설계대로 새 버전이 GENERATED 상태로
+    등록된다 — 여기서 Gate 단계까지 같이 정하지는 않는다.
+    """
+
+    def __init__(
+        self,
+        master: tk.Misc,
+        store_path: str,
+        criteria,
+        on_saved,
+    ) -> None:
+        super().__init__(master)
+        self._store_path = store_path
+        self._criteria = criteria
+        self._on_saved = on_saved
+
+        self.title("기준값 수정")
+        self.transient(master)
+        self.resizable(False, False)
+        self._build_widgets()
+        self.grab_set()
+
+    def _build_widgets(self) -> None:
+        frame = ttk.Frame(self, padding=12)
+        frame.pack(fill="both", expand=True)
+
+        ttk.Label(frame, text=f"{self._criteria.check_item} / {self._criteria.key}").grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 8)
+        )
+
+        ttk.Label(frame, text="최소값:").grid(row=1, column=0, sticky="w")
+        self._min_var = tk.StringVar(value=str(self._criteria.min_value))
+        min_entry = ttk.Entry(frame, textvariable=self._min_var, width=16)
+        min_entry.grid(row=1, column=1, pady=2)
+
+        ttk.Label(frame, text="최대값:").grid(row=2, column=0, sticky="w")
+        self._max_var = tk.StringVar(value=str(self._criteria.max_value))
+        ttk.Entry(frame, textvariable=self._max_var, width=16).grid(row=2, column=1, pady=2)
+
+        ttk.Label(
+            frame,
+            text="저장하면 새 버전(GENERATED)으로 등록되어 Gate 검증을\n처음부터 다시 거쳐야 합니다.",
+            foreground="#555555",
+            justify="left",
+        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 8))
+
+        buttons = ttk.Frame(frame)
+        buttons.grid(row=4, column=0, columnspan=2, sticky="e")
+        ttk.Button(buttons, text="취소", command=self.destroy).pack(side="right")
+        ttk.Button(buttons, text="저장", command=self._on_save_clicked).pack(
+            side="right", padx=(0, 6)
+        )
+
+        min_entry.focus_set()
+        self.bind("<Return>", lambda _event: self._on_save_clicked())
+        self.bind("<Escape>", lambda _event: self.destroy())
+
+    def _on_save_clicked(self) -> None:
+        try:
+            min_value, max_value = parse_min_max(self._min_var.get(), self._max_var.get())
+        except ValueError as exc:
+            messagebox.showerror("기준값 수정", str(exc), parent=self)
+            return
+
+        try:
+            save_criteria_value(
+                self._store_path, self._criteria.check_item, self._criteria.key, min_value, max_value
+            )
+        except Exception as exc:  # noqa: BLE001 - 사용자에게 그대로 원인을 보여주기 위함
+            messagebox.showerror("기준값 수정", f"저장에 실패했습니다:\n{exc}", parent=self)
+            return
+
+        self.destroy()
+        self._on_saved()
 
 
 def main() -> int:
