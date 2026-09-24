@@ -2,6 +2,13 @@ from __future__ import annotations
 
 import argparse
 
+from aoi_hw_check.cli_output import (
+    enable_windows_ansi,
+    format_verdict_badge,
+    print_banner,
+    print_result,
+    save_run_report,
+)
 from aoi_hw_check.checks.c_class_scan.collector import MockScanCollector
 from aoi_hw_check.checks.c_class_scan.example_criteria import (
     seed_example_dof_criteria,
@@ -287,12 +294,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _print_result(result: CheckResult) -> None:
-    print(f"[{result.verdict.value}] {result.check_item} - {result.detail}")
-    for mismatch in result.deviation:
-        print(
-            f"  - {mismatch.field_path}: "
-            f"baseline={mismatch.baseline_value} current={mismatch.current_value}"
-        )
+    print_result(result)
 
 
 def _run_all(args: argparse.Namespace) -> int:
@@ -302,6 +304,8 @@ def _run_all(args: argparse.Namespace) -> int:
     --inspection-program-host, --use-wmi)에 따라 항목별로 실제 구현체 또는
     Mock을 사용한다 (개별 서브커맨드와 동일한 규칙).
     """
+    print_banner(args.equipment_id)
+
     store = SQLiteResultStore(args.db)
     control_connection = _control_program_connection(args)
     ppmac_connection = _ppmac_connection(args)
@@ -424,20 +428,26 @@ def _run_all(args: argparse.Namespace) -> int:
     print(f"[C분류] {c_class_outcome.detail}")
     for result in c_class_outcome.results:
         _print_result(result)
+    results.extend(c_class_outcome.results)
 
     print()
     action_item_list = build_action_item_list(store, args.equipment_id)
     if action_item_list:
         print(f"{args.equipment_id} 조치 대상 목록 ({len(action_item_list)}건)")
         for item in action_item_list:
-            print(f"  [{item.verdict.value}] {item.check_item}: {item.detail}")
+            print(f"  {format_verdict_badge(item.verdict)} {item.check_item}: {item.detail}")
     else:
         print(f"{args.equipment_id}: 조치 대상 없음 — 셋업 착수 가능")
+
+    report_path = save_run_report(args.equipment_id, results, action_item_list)
+    print()
+    print(f"결과가 {report_path} 에 저장되었습니다.")
 
     return 1 if action_item_list or c_class_outcome.escalated else 0
 
 
 def main(argv: list[str] | None = None) -> int:
+    enable_windows_ansi()
     parser = build_parser()
     args = parser.parse_args(argv)
 
