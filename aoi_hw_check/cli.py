@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -18,7 +19,7 @@ from aoi_hw_check.checks.c_class_scan.example_criteria import (
     seed_example_focus_criteria,
     seed_example_gantry_criteria,
 )
-from aoi_hw_check.checks.c_class_scan.pipeline import run_c_class_pipeline
+from aoi_hw_check.checks.c_class_scan.pipeline import CClassPipelineOutcome, run_c_class_pipeline
 from aoi_hw_check.checks.interlock_check.example_criteria import (
     seed_example_criteria as seed_example_interlock_criteria,
 )
@@ -46,7 +47,7 @@ from aoi_hw_check.checks.single_unit_check.runner import MockSingleUnitSequenceR
 from aoi_hw_check.core.gate import InvalidGateTransition
 from aoi_hw_check.core.models import CheckResult, GateStatus, Verdict
 from aoi_hw_check.core.report import build_action_item_list
-from aoi_hw_check.core.storage import SQLiteResultStore
+from aoi_hw_check.core.storage import ResultStore, SQLiteResultStore
 from aoi_hw_check.core.thresholds import JSONCriteriaStore
 from aoi_hw_check.integrations.control_program.clients import (
     TCPInterlockTestRunner,
@@ -301,13 +302,16 @@ def _print_result(result: CheckResult) -> None:
 
 @dataclass(frozen=True)
 class RunAllOutcome:
-    """execute_run_all()의 결과 — CLI 텍스트 출력/GUI 표시 등 렌더링 방식과 무관한 순수 데이터."""
+    """execute_run_all()/execute_selected()의 결과 — CLI 텍스트 출력/GUI 표시 등
+    렌더링 방식과 무관한 순수 데이터. 선택 실행 시에는 실행하지 않은 항목은
+    빠지고, 실행한 항목만 담긴다."""
 
     results: list[CheckResult]
-    """A/B분류 7항목의 결과 (실행 순서대로)."""
+    """A/B분류 중 실행한 항목의 결과 (실행 순서대로)."""
     c_class_detail: str
+    """C분류를 실행하지 않았으면 빈 문자열."""
     c_class_results: list[CheckResult]
-    """C분류 6항목의 결과 (기준 시료 1회 Scan 공유)."""
+    """C분류를 실행했을 때만 채워지는, 6항목의 결과 (기준 시료 1회 Scan 공유)."""
     action_items: list[CheckResult]
     escalated: bool
     """C분류 재Scan 상한 초과로 작업자 개입이 필요한 상태인지."""
@@ -315,112 +319,120 @@ class RunAllOutcome:
 
     @property
     def all_results(self) -> list[CheckResult]:
-        """13개 항목 전체 결과 (실행 순서대로) — 리포트 저장에 쓰인 것과 동일한 목록."""
+        """실행한 항목 전체 결과 (실행 순서대로) — 리포트 저장에 쓰인 것과 동일한 목록."""
         return [*self.results, *self.c_class_results]
 
 
-def execute_run_all(args: argparse.Namespace) -> RunAllOutcome:
-    """13개 항목을 순서대로 전부 실행하고 리포트 파일까지 저장한다 (화면 출력은 하지 않음).
+@dataclass(frozen=True)
+class _RunContext:
+    """항목 실행마다 새로 만들지 않고 공유해야 하는 것들 — 같은 실행 내 여러 항목이
+    같은 DB(baseline/동종 설비 비교)와 같은 TCP 연결(실제 연동 시 소켓 재사용)을
+    쓰도록 한다."""
 
-    지정된 연동 옵션(--control-program-host, --ppmac-host,
-    --inspection-program-host, --use-wmi)에 따라 항목별로 실제 구현체 또는
-    Mock을 사용한다 (개별 서브커맨드와 동일한 규칙). CLI(`_run_all`)와
-    GUI(`aoi_hw_check.gui`)가 이 함수를 공유한다.
-    """
-    store = SQLiteResultStore(args.db)
-    control_connection = _control_program_connection(args)
-    ppmac_connection = _ppmac_connection(args)
-    inspection_connection = _inspection_program_connection(args)
+    store: ResultStore
+    control_connection: ControlProgramConnection | None
+    ppmac_connection: PmacAsciiConnection | None
+    inspection_connection: InspectionProgramConnection | None
 
-    results: list[CheckResult] = []
 
-    # A분류
+def _build_run_context(args: argparse.Namespace) -> _RunContext:
+    return _RunContext(
+        store=SQLiteResultStore(args.db),
+        control_connection=_control_program_connection(args),
+        ppmac_connection=_ppmac_connection(args),
+        inspection_connection=_inspection_program_connection(args),
+    )
+
+
+def execute_pc_check(args: argparse.Namespace, ctx: _RunContext) -> CheckResult:
     pc_collector = (
         WindowsPCStateCollector(create_wmi_client(), load_pc_check_config(args.pc_config))
         if args.use_wmi
         else MockPCStateCollector()
     )
-    results.append(run_pc_check(pc_collector, store, args.equipment_id))
+    return run_pc_check(pc_collector, ctx.store, args.equipment_id)
 
+
+def execute_motion_hw_check(args: argparse.Namespace, ctx: _RunContext) -> CheckResult:
     motion_hw_criteria = JSONCriteriaStore("motion_hw_check_criteria.json")
     if args.seed_example_criteria:
         seed_example_motion_criteria(motion_hw_criteria)
     motion_hw_collector = (
-        PPMACMotionHWCollector(ppmac_connection, load_axis_variable_map(args.axis_map))
-        if ppmac_connection
+        PPMACMotionHWCollector(ctx.ppmac_connection, load_axis_variable_map(args.axis_map))
+        if ctx.ppmac_connection
         else MockMotionHWCollector()
     )
-    results.append(
-        run_motion_hw_check(motion_hw_collector, motion_hw_criteria, store, args.equipment_id)
-    )
+    return run_motion_hw_check(motion_hw_collector, motion_hw_criteria, ctx.store, args.equipment_id)
 
+
+def execute_optical_comm_check(args: argparse.Namespace, ctx: _RunContext) -> CheckResult:
     optical_collector = (
-        TCPOpticalCommCollector(inspection_connection)
-        if inspection_connection
+        TCPOpticalCommCollector(ctx.inspection_connection)
+        if ctx.inspection_connection
         else MockOpticalCommCollector()
     )
-    results.append(run_optical_comm_check(optical_collector, store, args.equipment_id))
+    return run_optical_comm_check(optical_collector, ctx.store, args.equipment_id)
 
-    # B분류
+
+def execute_io_check(args: argparse.Namespace, ctx: _RunContext) -> CheckResult:
     dangerous_ids = load_dangerous_io_ids(args.danger_list)
     approved_ids = {
         io_id.strip() for io_id in args.approve_dangerous.split(",") if io_id.strip()
     }
     io_client = (
-        TCPPLCTestModeClient(control_connection)
-        if control_connection
+        TCPPLCTestModeClient(ctx.control_connection)
+        if ctx.control_connection
         else MockPLCTestModeClient()
     )
-    results.append(
-        run_io_check(
-            io_client, DEFAULT_IO_MAP, dangerous_ids, approved_ids, store, args.equipment_id
-        )
+    return run_io_check(
+        io_client, DEFAULT_IO_MAP, dangerous_ids, approved_ids, ctx.store, args.equipment_id
     )
 
+
+def execute_single_unit_check(args: argparse.Namespace, ctx: _RunContext) -> CheckResult:
     single_unit_runner = (
-        TCPSingleUnitSequenceRunner(control_connection)
-        if control_connection
+        TCPSingleUnitSequenceRunner(ctx.control_connection)
+        if ctx.control_connection
         else MockSingleUnitSequenceRunner()
     )
-    results.append(
-        run_single_unit_check(
-            single_unit_runner, store, args.equipment_id, supervised=args.supervised
-        )
+    return run_single_unit_check(
+        single_unit_runner, ctx.store, args.equipment_id, supervised=args.supervised
     )
 
+
+def execute_motion_tuning_check(args: argparse.Namespace, ctx: _RunContext) -> CheckResult:
     motion_tuning_criteria = JSONCriteriaStore("motion_tuning_check_criteria.json")
     if args.seed_example_criteria:
         seed_example_motion_tuning_criteria(motion_tuning_criteria)
     motion_tuning_runner = (
-        PPMACMotionTuningRunner(ppmac_connection, load_move_specs(args.move_specs))
-        if ppmac_connection
+        PPMACMotionTuningRunner(ctx.ppmac_connection, load_move_specs(args.move_specs))
+        if ctx.ppmac_connection
         else MockMotionTuningRunner()
     )
-    results.append(
-        run_motion_tuning_check(
-            motion_tuning_runner, motion_tuning_criteria, store, args.equipment_id
-        )
+    return run_motion_tuning_check(
+        motion_tuning_runner, motion_tuning_criteria, ctx.store, args.equipment_id
     )
 
+
+def execute_interlock_check(args: argparse.Namespace, ctx: _RunContext) -> CheckResult:
     interlock_criteria = JSONCriteriaStore("interlock_check_criteria.json")
     if args.seed_example_criteria:
         seed_example_interlock_criteria(interlock_criteria)
     interlock_runner = (
-        TCPInterlockTestRunner(control_connection)
-        if control_connection
+        TCPInterlockTestRunner(ctx.control_connection)
+        if ctx.control_connection
         else MockInterlockTestRunner()
     )
-    results.append(
-        run_interlock_check(
-            interlock_runner,
-            INTERLOCK_EXPECTED_SEQUENCE,
-            interlock_criteria,
-            store,
-            args.equipment_id,
-        )
+    return run_interlock_check(
+        interlock_runner,
+        INTERLOCK_EXPECTED_SEQUENCE,
+        interlock_criteria,
+        ctx.store,
+        args.equipment_id,
     )
 
-    # C분류 (기준 시료 1회 Scan 공유 파이프라인)
+
+def execute_c_class_scan(args: argparse.Namespace, ctx: _RunContext) -> CClassPipelineOutcome:
     dof_store = JSONCriteriaStore("c_class_dof_criteria.json")
     focus_store = JSONCriteriaStore("c_class_focus_criteria.json")
     flatness_store = JSONCriteriaStore("c_class_flatness_criteria.json")
@@ -431,32 +443,89 @@ def execute_run_all(args: argparse.Namespace) -> RunAllOutcome:
         seed_example_flatness_criteria(flatness_store)
         seed_example_gantry_criteria(gantry_store)
     scan_collector = (
-        TCPScanCollector(inspection_connection) if inspection_connection else MockScanCollector()
+        TCPScanCollector(ctx.inspection_connection)
+        if ctx.inspection_connection
+        else MockScanCollector()
     )
-    c_class_outcome = run_c_class_pipeline(
+    return run_c_class_pipeline(
         scan_collector,
         dof_store,
         focus_store,
         flatness_store,
         gantry_store,
-        store,
+        ctx.store,
         args.equipment_id,
         max_scan_attempts=args.max_scan_attempts,
     )
 
-    action_item_list = build_action_item_list(store, args.equipment_id)
+
+# A/B분류 7항목 — (선택 실행용 key, 화면 표시 이름, 실행 함수). C분류는 6항목이
+# 기준 시료 1회 Scan을 공유해 한 단위로만 선택할 수 있으므로 별도로 다룬다
+# (C_CLASS_SCAN_KEY/C_CLASS_SCAN_LABEL, execute_c_class_scan).
+CHECK_ITEM_SPECS: list[tuple[str, str, Callable[[argparse.Namespace, _RunContext], CheckResult]]] = [
+    ("pc_check", "PC 동작 Check", execute_pc_check),
+    ("motion_hw_check", "모션 H/W Check", execute_motion_hw_check),
+    ("optical_comm_check", "광학 부품 동작·통신 확인", execute_optical_comm_check),
+    ("io_check", "I/O Check", execute_io_check),
+    ("single_unit_check", "설비 단동 동작 확인", execute_single_unit_check),
+    ("motion_tuning_check", "모션 Tuning 상태 확인", execute_motion_tuning_check),
+    ("interlock_check", "설비 연동 동작 Test", execute_interlock_check),
+]
+C_CLASS_SCAN_KEY = "c_class_scan"
+C_CLASS_SCAN_LABEL = "C분류 6항목 (Stage 평탄도·광학계·AFM·Gantry — 기준 시료 1회 Scan 공유)"
+
+
+def execute_selected(args: argparse.Namespace, selected_keys: set[str]) -> RunAllOutcome:
+    """CHECK_ITEM_SPECS의 key(+ 필요하면 C_CLASS_SCAN_KEY)로 지정한 항목만 실행하고
+    리포트 파일까지 저장한다 (화면 출력은 하지 않음). 지정된 연동 옵션에 따라
+    항목별로 실제 구현체 또는 Mock을 쓰는 규칙은 execute_run_all과 동일하다.
+
+    조치 대상 목록은 이번에 실행한 항목만이 아니라 설비의 항목별 "가장 최근"
+    결과를 기준으로 한다(build_action_item_list와 동일한 원칙) — 이번 실행에서
+    빠진 항목도 과거에 FAIL/NA였다면 계속 목록에 남는다.
+    """
+    ctx = _build_run_context(args)
+
+    results = [
+        execute_fn(args, ctx)
+        for key, _label, execute_fn in CHECK_ITEM_SPECS
+        if key in selected_keys
+    ]
+
+    c_class_detail = ""
+    c_class_results: list[CheckResult] = []
+    escalated = False
+    if C_CLASS_SCAN_KEY in selected_keys:
+        c_class_outcome = execute_c_class_scan(args, ctx)
+        c_class_detail = c_class_outcome.detail
+        c_class_results = c_class_outcome.results
+        escalated = c_class_outcome.escalated
+
+    action_item_list = build_action_item_list(ctx.store, args.equipment_id)
     report_path = save_run_report(
-        args.equipment_id, [*results, *c_class_outcome.results], action_item_list
+        args.equipment_id, [*results, *c_class_results], action_item_list
     )
 
     return RunAllOutcome(
         results=results,
-        c_class_detail=c_class_outcome.detail,
-        c_class_results=c_class_outcome.results,
+        c_class_detail=c_class_detail,
+        c_class_results=c_class_results,
         action_items=action_item_list,
-        escalated=c_class_outcome.escalated,
+        escalated=escalated,
         report_path=report_path,
     )
+
+
+def execute_run_all(args: argparse.Namespace) -> RunAllOutcome:
+    """13개 항목을 순서대로 전부 실행하고 리포트 파일까지 저장한다 (화면 출력은 하지 않음).
+
+    지정된 연동 옵션(--control-program-host, --ppmac-host,
+    --inspection-program-host, --use-wmi)에 따라 항목별로 실제 구현체 또는
+    Mock을 사용한다 (개별 서브커맨드와 동일한 규칙). CLI(`_run_all`)와
+    GUI(`aoi_hw_check.gui`)가 이 함수를 공유한다.
+    """
+    all_keys = {key for key, _label, _fn in CHECK_ITEM_SPECS} | {C_CLASS_SCAN_KEY}
+    return execute_selected(args, all_keys)
 
 
 def _run_all(args: argparse.Namespace) -> int:

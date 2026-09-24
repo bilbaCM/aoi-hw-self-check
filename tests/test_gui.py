@@ -5,8 +5,23 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from aoi_hw_check.cli import C_CLASS_SCAN_KEY
 from aoi_hw_check.core.models import CheckResult, FieldMismatch, Verdict
-from aoi_hw_check.gui_support import build_run_all_args, format_action_items, format_detail_cell
+from aoi_hw_check.gui_support import (
+    SELECTABLE_ITEMS,
+    build_run_all_args,
+    format_action_items,
+    format_detail_cell,
+)
+
+
+class SelectableItemsTest(unittest.TestCase):
+    def test_lists_seven_individual_items_plus_one_c_class_group(self) -> None:
+        keys = [key for key, _label in SELECTABLE_ITEMS]
+
+        self.assertEqual(len(keys), 8)
+        self.assertEqual(len(set(keys)), 8)  # 중복 key 없음
+        self.assertEqual(keys[-1], C_CLASS_SCAN_KEY)
 
 
 class BuildRunAllArgsTest(unittest.TestCase):
@@ -124,6 +139,24 @@ class HWSelfCheckAppRenderTest(unittest.TestCase):
         self.assertIn("조치 대상 목록 (1건)", action_text)
         self.assertIn("결과 저장 위치", self.app._report_var.get())
 
+    def test_all_items_are_selected_by_default(self) -> None:
+        self.assertEqual(len(self.app._item_vars), 8)
+        self.assertEqual(self.app._selected_item_keys(), set(self.app._item_vars))
+
+    def test_set_all_items_toggles_every_checkbox(self) -> None:
+        self.app._set_all_items(False)
+        self.assertEqual(self.app._selected_item_keys(), set())
+
+        self.app._set_all_items(True)
+        self.assertEqual(self.app._selected_item_keys(), set(self.app._item_vars))
+
+    def test_unchecking_one_item_excludes_it_from_selection(self) -> None:
+        self.app._item_vars["pc_check"].set(False)
+
+        selected = self.app._selected_item_keys()
+        self.assertNotIn("pc_check", selected)
+        self.assertEqual(len(selected), 7)
+
 
 @unittest.skipUnless(_TK_APP_AVAILABLE, "tkinter 또는 디스플레이를 사용할 수 없는 환경")
 class HWSelfCheckAppIntegrationTest(unittest.TestCase):
@@ -166,6 +199,19 @@ class HWSelfCheckAppIntegrationTest(unittest.TestCase):
         rows = self.app._tree.get_children()
         self.assertEqual(len(rows), 13)
         self.assertTrue(outcome.report_path.exists())
+
+    def test_unchecking_all_but_pc_check_runs_and_renders_only_that_item(self) -> None:
+        from aoi_hw_check.cli import execute_selected
+
+        self.app._set_all_items(False)
+        self.app._item_vars["pc_check"].set(True)
+
+        outcome = execute_selected(build_run_all_args("EQ01"), self.app._selected_item_keys())
+        self.app._render_outcome("EQ01", outcome)
+
+        rows = self.app._tree.get_children()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(self.app._tree.item(rows[0], "values")[1], "PC 동작 Check")
 
 
 if __name__ == "__main__":

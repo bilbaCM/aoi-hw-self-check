@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import argparse
 
-from aoi_hw_check.cli import build_parser
+from aoi_hw_check.cli import C_CLASS_SCAN_KEY, C_CLASS_SCAN_LABEL, CHECK_ITEM_SPECS, build_parser
 from aoi_hw_check.core.models import CheckResult, Verdict
 
 VERDICT_LABEL = {Verdict.PASS: "PASS", Verdict.FAIL: "FAIL", Verdict.NA: "NA"}
@@ -17,14 +17,23 @@ VERDICT_COLOR = {Verdict.PASS: "#1a7f37", Verdict.FAIL: "#cf222e", Verdict.NA: "
 
 DEFAULT_EQUIPMENT_ID = "EQ01"
 
+# 체크박스 목록에 쓰는 (선택 key, 화면 표시 이름) 순서쌍 — 13개 항목 중 C분류
+# 6항목은 기준 시료 1회 Scan을 공유해 나눌 수 없으므로 한 단위로 선택한다.
+SELECTABLE_ITEMS: list[tuple[str, str]] = [
+    (key, label) for key, label, _execute_fn in CHECK_ITEM_SPECS
+] + [(C_CLASS_SCAN_KEY, C_CLASS_SCAN_LABEL)]
+
 
 def build_run_all_args(equipment_id: str) -> argparse.Namespace:
-    """GUI에서 사용할 run-all 인자를 만든다.
+    """GUI에서 사용할 run-all 인자를 만든다 (전체 실행/선택 실행 공용).
 
-    run.bat과 동일하게 전 항목 Mock, 예시 기준(`--seed-example-criteria`) 자동
-    등록, 설비 단동 최초 구동은 GUI 조작자의 감독 하에 승인된 것으로 본다
-    (`--supervised`). 실제 설비 연동(제어/PPMAC/검사 프로그램 TCP 접속, WMI)은
-    1차 범위 밖이며, 기본 파서의 나머지 옵션은 전부 기본값(Mock)을 그대로 쓴다.
+    run-all의 전체 인자 집합을 그대로 만들어 두면 `cli.execute_run_all`과
+    `cli.execute_selected` 모두에 넘길 수 있다 — 실행할 항목은 args가 아니라
+    호출하는 쪽에서 고르는 key 집합으로 정해진다. run.bat과 동일하게 전 항목
+    Mock, 예시 기준(`--seed-example-criteria`) 자동 등록, 설비 단동 최초 구동은
+    GUI 조작자의 감독 하에 승인된 것으로 본다(`--supervised`). 실제 설비 연동
+    (제어/PPMAC/검사 프로그램 TCP 접속, WMI)은 1차 범위 밖이며, 기본 파서의
+    나머지 옵션은 전부 기본값(Mock)을 그대로 쓴다.
     """
     return build_parser().parse_args(
         [

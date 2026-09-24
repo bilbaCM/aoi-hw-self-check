@@ -1,9 +1,11 @@
 """AOI H/W Self-Check 자동화 프로그램의 GUI (Tkinter, 표준 라이브러리만 사용).
 
 설비 PC는 인터넷이 안 될 수 있어 추가 패키지 설치가 필요 없는 Tkinter로
-만든다. 1차 범위는 run-all(13개 항목 전부 실행) 결과를 표로 보여주는 것으로
-한정하고, 실제 판정 로직은 CLI와 동일하게 `aoi_hw_check.cli.execute_run_all`을
-그대로 재사용한다 — GUI는 표시 방식만 다를 뿐 판정 로직을 따로 구현하지 않는다.
+만든다. 체크박스로 13개 항목(C분류는 6항목이 기준 시료 1회 Scan을 공유해
+한 단위) 중 원하는 것만 골라 실행할 수 있고, 기본값은 전체 선택이라 아무것도
+바꾸지 않으면 run.bat과 같은 전체 실행이 된다. 실제 판정 로직은 CLI와 동일하게
+`aoi_hw_check.cli.execute_selected`를 그대로 재사용한다 — GUI는 표시 방식만
+다를 뿐 판정 로직을 따로 구현하지 않는다.
 """
 
 from __future__ import annotations
@@ -15,10 +17,11 @@ from datetime import datetime
 from tkinter import messagebox, ttk
 
 from aoi_hw_check import __version__
-from aoi_hw_check.cli import RunAllOutcome, execute_run_all
+from aoi_hw_check.cli import RunAllOutcome, execute_selected
 from aoi_hw_check.cli_output import PROGRAM_NAME
 from aoi_hw_check.gui_support import (
     DEFAULT_EQUIPMENT_ID,
+    SELECTABLE_ITEMS,
     VERDICT_COLOR,
     VERDICT_LABEL,
     build_run_all_args,
@@ -49,34 +52,70 @@ class HWSelfCheckApp(tk.Tk):
         entry.pack(side="left", padx=(4, 12))
         entry.bind("<Return>", lambda _event: self._on_run_clicked())
 
-        self._run_button = ttk.Button(top, text="전체 실행 (13개 항목)", command=self._on_run_clicked)
+        self._run_button = ttk.Button(top, text="선택 항목 실행", command=self._on_run_clicked)
         self._run_button.pack(side="left")
 
         self._status_var = tk.StringVar(value="대기 중")
         ttk.Label(top, textvariable=self._status_var).pack(side="left", padx=12)
 
+        body = ttk.Frame(self)
+        body.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+        selection_frame = ttk.LabelFrame(body, text="실행할 항목", padding=8)
+        selection_frame.pack(side="left", fill="y", padx=(0, 10))
+
+        # ttk::checkbutton은 생성자에 wraplength를 직접 받지 않으므로 스타일로 설정한다
+        # (C분류 항목처럼 긴 이름이 사이드바 폭을 넘지 않도록 줄바꿈).
+        style = ttk.Style(self)
+        style.configure("Selectable.TCheckbutton", wraplength=260)
+
+        select_buttons = ttk.Frame(selection_frame)
+        select_buttons.pack(fill="x", pady=(0, 6))
+        ttk.Button(select_buttons, text="전체 선택", command=lambda: self._set_all_items(True)).pack(
+            side="left"
+        )
+        ttk.Button(select_buttons, text="전체 해제", command=lambda: self._set_all_items(False)).pack(
+            side="left", padx=(6, 0)
+        )
+
+        self._item_vars: dict[str, tk.BooleanVar] = {}
+        for key, label in SELECTABLE_ITEMS:
+            var = tk.BooleanVar(value=True)
+            self._item_vars[key] = var
+            ttk.Checkbutton(
+                selection_frame, text=label, variable=var, style="Selectable.TCheckbutton"
+            ).pack(anchor="w", pady=1)
+
+        content = ttk.Frame(body)
+        content.pack(side="left", fill="both", expand=True)
+
         columns = ("verdict", "check_item", "detail")
-        self._tree = ttk.Treeview(self, columns=columns, show="headings", height=15)
+        self._tree = ttk.Treeview(content, columns=columns, show="headings", height=15)
         self._tree.heading("verdict", text="판정")
         self._tree.heading("check_item", text="항목")
         self._tree.heading("detail", text="상세")
         self._tree.column("verdict", width=70, anchor="center", stretch=False)
         self._tree.column("check_item", width=220, anchor="w", stretch=False)
         self._tree.column("detail", width=560, anchor="w")
-        self._tree.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        self._tree.pack(fill="both", expand=True, pady=(0, 10))
 
         for verdict, color in VERDICT_COLOR.items():
             self._tree.tag_configure(verdict.value, foreground=color)
 
-        action_frame = ttk.LabelFrame(self, text="조치 대상 목록", padding=8)
-        action_frame.pack(fill="both", expand=False, padx=10, pady=(0, 10))
+        action_frame = ttk.LabelFrame(content, text="조치 대상 목록", padding=8)
+        action_frame.pack(fill="both", expand=False, pady=(0, 10))
         self._action_text = tk.Text(action_frame, height=6, wrap="word", state="disabled")
         self._action_text.pack(fill="both", expand=True)
 
         self._report_var = tk.StringVar(value="")
-        ttk.Label(self, textvariable=self._report_var, foreground="#555555").pack(
-            anchor="w", padx=10, pady=(0, 10)
-        )
+        ttk.Label(content, textvariable=self._report_var, foreground="#555555").pack(anchor="w")
+
+    def _set_all_items(self, checked: bool) -> None:
+        for var in self._item_vars.values():
+            var.set(checked)
+
+    def _selected_item_keys(self) -> set[str]:
+        return {key for key, var in self._item_vars.items() if var.get()}
 
     def _on_run_clicked(self) -> None:
         equipment_id = self._equipment_id_var.get().strip()
@@ -84,20 +123,27 @@ class HWSelfCheckApp(tk.Tk):
             messagebox.showwarning(PROGRAM_NAME, "설비 ID를 입력하세요.")
             return
 
+        selected_keys = self._selected_item_keys()
+        if not selected_keys:
+            messagebox.showwarning(PROGRAM_NAME, "실행할 항목을 하나 이상 선택하세요.")
+            return
+
         self._run_button.state(["disabled"])
-        self._status_var.set("실행 중 (Mock, 13개 항목)...")
+        self._status_var.set(f"실행 중 (Mock, {len(selected_keys)}개 항목 선택)...")
         self._tree.delete(*self._tree.get_children())
         self._set_action_text("")
         self._report_var.set("")
 
-        thread = threading.Thread(target=self._run_in_background, args=(equipment_id,), daemon=True)
+        thread = threading.Thread(
+            target=self._run_in_background, args=(equipment_id, selected_keys), daemon=True
+        )
         thread.start()
         self.after(100, self._poll_result_queue)
 
-    def _run_in_background(self, equipment_id: str) -> None:
+    def _run_in_background(self, equipment_id: str, selected_keys: set[str]) -> None:
         # UI 스레드를 막지 않도록 별도 스레드에서 실행하고, 결과/예외는 큐로 전달한다.
         try:
-            outcome = execute_run_all(build_run_all_args(equipment_id))
+            outcome = execute_selected(build_run_all_args(equipment_id), selected_keys)
         except Exception as exc:  # noqa: BLE001 - GUI 스레드로 예외 메시지를 전달하기 위함
             self._result_queue.put(("error", exc))
             return
