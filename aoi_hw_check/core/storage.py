@@ -35,6 +35,15 @@ class ResultStore(ABC):
     ) -> list[dict[str, Any]]: ...
 
     @abstractmethod
+    def list_latest_baselines_by_equipment(
+        self, check_item: str
+    ) -> dict[str, dict[str, Any]]:
+        """특정 항목의 설비별 최신 baseline 스냅샷을 모두 모아 반환한다 (설비ID -> 스냅샷).
+
+        동종 설비 간 비교(예: 모션 Tuning의 "동종 설비 실측값 중 최량값")에 사용한다.
+        """
+
+    @abstractmethod
     def record_scan_attempt(self, equipment_id: str, all_passed: bool) -> None:
         """C분류 기준 시료 Scan 1회 시도를 기록한다 (재Scan 횟수 상한 판단에 사용)."""
 
@@ -180,6 +189,23 @@ class SQLiteResultStore(ResultStore):
             {"snapshot": json.loads(row["snapshot"]), "created_at": row["created_at"]}
             for row in rows
         ]
+
+    def list_latest_baselines_by_equipment(
+        self, check_item: str
+    ) -> dict[str, dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT equipment_id, snapshot FROM baseline_history
+                WHERE check_item = ?
+                ORDER BY created_at ASC, id ASC
+                """,
+                (check_item,),
+            ).fetchall()
+        latest: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            latest[row["equipment_id"]] = json.loads(row["snapshot"])
+        return latest
 
     def record_scan_attempt(self, equipment_id: str, all_passed: bool) -> None:
         with self._connect() as conn:

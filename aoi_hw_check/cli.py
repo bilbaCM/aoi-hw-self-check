@@ -23,13 +23,19 @@ from aoi_hw_check.checks.motion_hw_check.example_criteria import (
     seed_example_criteria as seed_example_motion_criteria,
 )
 from aoi_hw_check.checks.motion_hw_check.judge import run_motion_hw_check
+from aoi_hw_check.checks.motion_tuning_check.example_criteria import (
+    seed_example_criteria as seed_example_motion_tuning_criteria,
+)
+from aoi_hw_check.checks.motion_tuning_check.judge import run_motion_tuning_check
+from aoi_hw_check.checks.motion_tuning_check.runner import MockMotionTuningRunner
 from aoi_hw_check.checks.optical_comm_check.collector import MockOpticalCommCollector
 from aoi_hw_check.checks.optical_comm_check.judge import run_optical_comm_check
 from aoi_hw_check.checks.pc_check.collector import MockPCStateCollector
 from aoi_hw_check.checks.pc_check.judge import run_pc_check
 from aoi_hw_check.checks.single_unit_check.judge import run_single_unit_check
 from aoi_hw_check.checks.single_unit_check.runner import MockSingleUnitSequenceRunner
-from aoi_hw_check.core.models import CheckResult, Verdict
+from aoi_hw_check.core.gate import InvalidGateTransition
+from aoi_hw_check.core.models import CheckResult, GateStatus, Verdict
 from aoi_hw_check.core.report import build_action_item_list
 from aoi_hw_check.core.storage import SQLiteResultStore
 from aoi_hw_check.core.thresholds import JSONCriteriaStore
@@ -125,6 +131,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="개발/테스트용 예시 기준(DOF/초점비율/평탄도/직각도)을 등록한 뒤 실행",
     )
     c_class_scan.add_argument("--max-scan-attempts", type=int, default=3)
+
+    motion_tuning_check = subparsers.add_parser(
+        "motion-tuning-check", help="모션 Tuning 상태 확인 실행"
+    )
+    motion_tuning_check.add_argument("--equipment-id", required=True)
+    motion_tuning_check.add_argument("--db", default="aoi_hw_check.sqlite3")
+    motion_tuning_check.add_argument(
+        "--criteria", default="motion_tuning_check_criteria.json"
+    )
+    motion_tuning_check.add_argument(
+        "--seed-example-criteria",
+        action="store_true",
+        help="개발/테스트용 예시 허용 배수를 등록한 뒤 실행 (동종 설비 실측 분포 기반 아님)",
+    )
+
+    criteria_gate = subparsers.add_parser(
+        "criteria-gate", help="기준(Criteria)의 Gate 상태를 한 단계 전진시킨다"
+    )
+    criteria_gate.add_argument("--store", required=True, help="JSON 기준 저장소 파일 경로")
+    criteria_gate.add_argument("--check-item", required=True)
+    criteria_gate.add_argument("--key", required=True)
+    criteria_gate.add_argument(
+        "--target", required=True, choices=[status.value for status in GateStatus]
+    )
 
     return parser
 
@@ -229,6 +259,29 @@ def main(argv: list[str] | None = None) -> int:
         if outcome.escalated:
             return 1
         return 0 if outcome.all_passed else 1
+    elif args.command == "motion-tuning-check":
+        store = SQLiteResultStore(args.db)
+        criteria_store = JSONCriteriaStore(args.criteria)
+        if args.seed_example_criteria:
+            seed_example_motion_tuning_criteria(criteria_store)
+        result = run_motion_tuning_check(
+            MockMotionTuningRunner(), criteria_store, store, args.equipment_id
+        )
+    elif args.command == "criteria-gate":
+        criteria_store = JSONCriteriaStore(args.store)
+        try:
+            criteria = criteria_store.advance_criteria_gate(
+                args.check_item, args.key, GateStatus(args.target)
+            )
+        except (KeyError, InvalidGateTransition) as exc:
+            print(f"오류: {exc}")
+            return 1
+        print(
+            f"{criteria.check_item} / {criteria.key}: gate_status -> "
+            f"{criteria.gate_status.value} (v{criteria.version}, "
+            f"[{criteria.min_value}, {criteria.max_value}])"
+        )
+        return 0
     else:
         return 1
 

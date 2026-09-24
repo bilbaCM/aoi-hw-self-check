@@ -41,6 +41,35 @@ class BaselineHistoryTest(unittest.TestCase):
         self.assertIsNone(self.store.get_baseline("EQ02", CHECK_ITEM))
 
 
+class CrossEquipmentBaselineTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.store = SQLiteResultStore(Path(self._tmpdir.name) / "test.sqlite3")
+
+    def tearDown(self) -> None:
+        self._tmpdir.cleanup()
+
+    def test_no_snapshots_yields_empty_dict(self) -> None:
+        self.assertEqual(self.store.list_latest_baselines_by_equipment(CHECK_ITEM), {})
+
+    def test_collects_latest_snapshot_per_equipment(self) -> None:
+        self.store.save_baseline("EQ01", CHECK_ITEM, {"x": 1.0})
+        self.store.save_baseline("EQ02", CHECK_ITEM, {"x": 2.0})
+        self.store.save_baseline("EQ01", CHECK_ITEM, {"x": 1.5})  # EQ01 갱신
+
+        snapshots = self.store.list_latest_baselines_by_equipment(CHECK_ITEM)
+
+        self.assertEqual(snapshots, {"EQ01": {"x": 1.5}, "EQ02": {"x": 2.0}})
+
+    def test_other_check_items_are_excluded(self) -> None:
+        self.store.save_baseline("EQ01", CHECK_ITEM, {"x": 1.0})
+        self.store.save_baseline("EQ01", "다른 항목", {"x": 9.0})
+
+        snapshots = self.store.list_latest_baselines_by_equipment(CHECK_ITEM)
+
+        self.assertEqual(snapshots, {"EQ01": {"x": 1.0}})
+
+
 class ScanAttemptTrackingTest(unittest.TestCase):
     def setUp(self) -> None:
         self._tmpdir = tempfile.TemporaryDirectory()
