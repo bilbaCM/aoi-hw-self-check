@@ -7,14 +7,15 @@ from aoi_hw_check.core.storage import ResultStore
 
 CHECK_ITEM = "광학 부품 동작·통신 확인"
 
+# 카메라 Gray 출력은 8bit라 255가 상한이다 — 광량을 계속 올려도 센서가 그 이상
+# 표현하지 못해 255에서 눌러붙는(포화) 구간이 생기는데, 이는 고장이 아니라
+# 정상 거동이므로 그 구간에서 Gray 값이 늘지 않는 것만으로는 FAIL 처리하지
+# 않는다. 다만 포화 구간에서 값이 오히려 줄어드는 건(노이즈/고장) 여전히 FAIL.
+_SATURATION_GRAY_VALUE = 255
+
 
 def evaluate_channel(response: ChannelResponse) -> tuple[Verdict, str]:
-    """통신 응답과, 광량 증가에 따른 Gray 단조 증가 여부를 판정한다 (절대 기준 수치 불필요).
-
-    주의: 카메라 Gray 값이 상한(예: 8bit=255)에서 포화되는 구간은 현재
-    비단조로 간주되어 FAIL 처리된다 — 실제 센서 포화 거동 확인 후 허용
-    범위를 추가할지 결정 필요 (TBD).
-    """
+    """통신 응답과, 광량 증가에 따른 Gray 단조 증가 여부를 판정한다 (절대 기준 수치 불필요)."""
     if not response.communication_ok:
         return Verdict.FAIL, "통신 응답 없음"
 
@@ -23,13 +24,16 @@ def evaluate_channel(response: ChannelResponse) -> tuple[Verdict, str]:
 
     ordered = sorted(response.samples, key=lambda s: s.light_level)
     for prev, curr in zip(ordered, ordered[1:]):
-        if curr.gray_value <= prev.gray_value:
-            return Verdict.FAIL, (
-                f"광량 {prev.light_level}->{curr.light_level} 구간에서 "
-                f"Gray 비단조 ({prev.gray_value}->{curr.gray_value})"
-            )
+        if curr.gray_value > prev.gray_value:
+            continue
+        if prev.gray_value >= _SATURATION_GRAY_VALUE and curr.gray_value >= _SATURATION_GRAY_VALUE:
+            continue  # 이미 포화된 상한(255)에 눌러붙은 것 — 정상
+        return Verdict.FAIL, (
+            f"광량 {prev.light_level}->{curr.light_level} 구간에서 "
+            f"Gray 비단조 ({prev.gray_value}->{curr.gray_value})"
+        )
 
-    return Verdict.PASS, "광량 증가에 따라 Gray 단조 증가 확인"
+    return Verdict.PASS, "광량 증가에 따라 Gray 단조 증가 확인 (포화 구간 제외)"
 
 
 def run_optical_comm_check(
