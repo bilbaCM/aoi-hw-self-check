@@ -45,6 +45,13 @@ from aoi_hw_check.integrations.control_program.clients import (
     TCPSingleUnitSequenceRunner,
 )
 from aoi_hw_check.integrations.control_program.connection import ControlProgramConnection
+from aoi_hw_check.integrations.ppmac.axis_map import load_axis_variable_map
+from aoi_hw_check.integrations.ppmac.connection import PmacAsciiConnection
+from aoi_hw_check.integrations.ppmac.motion_hw_collector import PPMACMotionHWCollector
+from aoi_hw_check.integrations.ppmac.motion_tuning_runner import (
+    PPMACMotionTuningRunner,
+    load_move_specs,
+)
 
 INTERLOCK_EXPECTED_SEQUENCE = [
     "upstream_ready",
@@ -71,6 +78,23 @@ def _control_program_connection(args: argparse.Namespace) -> ControlProgramConne
     return None
 
 
+def _add_ppmac_args(subparser: argparse.ArgumentParser) -> None:
+    """PPMAC(Power PMAC)과의 LAN 직결 연동 옵션. 둘 다 지정하면 실제 PPMAC
+    클라이언트를, 아니면 Mock을 사용한다."""
+    subparser.add_argument(
+        "--ppmac-host",
+        default=None,
+        help="PPMAC LAN 호스트 (미지정 시 Mock 사용)",
+    )
+    subparser.add_argument("--ppmac-port", type=int, default=1025)
+
+
+def _ppmac_connection(args: argparse.Namespace) -> PmacAsciiConnection | None:
+    if args.ppmac_host:
+        return PmacAsciiConnection(args.ppmac_host, args.ppmac_port)
+    return None
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="aoi-hw-check")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -88,6 +112,10 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="개발/테스트용 예시 기준 범위를 등록한 뒤 실행 (실제 출하 DATA 아님)",
     )
+    motion_check.add_argument(
+        "--axis-map", default="config/ppmac_axis_map.example.json"
+    )
+    _add_ppmac_args(motion_check)
 
     optical_check = subparsers.add_parser(
         "optical-comm-check", help="광학 부품 동작·통신 확인 실행"
@@ -171,6 +199,10 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="개발/테스트용 예시 허용 배수를 등록한 뒤 실행 (동종 설비 실측 분포 기반 아님)",
     )
+    motion_tuning_check.add_argument(
+        "--move-specs", default="config/ppmac_tuning_moves.example.json"
+    )
+    _add_ppmac_args(motion_tuning_check)
 
     criteria_gate = subparsers.add_parser(
         "criteria-gate", help="기준(Criteria)의 Gate 상태를 한 단계 전진시킨다"
@@ -206,9 +238,13 @@ def main(argv: list[str] | None = None) -> int:
         criteria_store = JSONCriteriaStore(args.criteria)
         if args.seed_example_criteria:
             seed_example_motion_criteria(criteria_store)
-        result = run_motion_hw_check(
-            MockMotionHWCollector(), criteria_store, store, args.equipment_id
+        ppmac_connection = _ppmac_connection(args)
+        collector = (
+            PPMACMotionHWCollector(ppmac_connection, load_axis_variable_map(args.axis_map))
+            if ppmac_connection
+            else MockMotionHWCollector()
         )
+        result = run_motion_hw_check(collector, criteria_store, store, args.equipment_id)
     elif args.command == "optical-comm-check":
         store = SQLiteResultStore(args.db)
         result = run_optical_comm_check(
@@ -300,9 +336,13 @@ def main(argv: list[str] | None = None) -> int:
         criteria_store = JSONCriteriaStore(args.criteria)
         if args.seed_example_criteria:
             seed_example_motion_tuning_criteria(criteria_store)
-        result = run_motion_tuning_check(
-            MockMotionTuningRunner(), criteria_store, store, args.equipment_id
+        ppmac_connection = _ppmac_connection(args)
+        runner = (
+            PPMACMotionTuningRunner(ppmac_connection, load_move_specs(args.move_specs))
+            if ppmac_connection
+            else MockMotionTuningRunner()
         )
+        result = run_motion_tuning_check(runner, criteria_store, store, args.equipment_id)
     elif args.command == "criteria-gate":
         criteria_store = JSONCriteriaStore(args.store)
         try:

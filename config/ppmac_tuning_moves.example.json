@@ -1,0 +1,33 @@
+{
+  "_comment": "TBD 예시 - 실제 Motor 번호/좌표 단위/속도/공차는 설비 PPMAC 설정에 맞춰 교체 필요",
+  "X": {
+    "motor": 1,
+    "position_variable": "Motor[1].ActPos",
+    "start_position": 0.0,
+    "target_position": 1000.0,
+    "settle_tolerance": 2.0,
+    "settle_hold_ms": 100.0,
+    "poll_interval_ms": 20.0,
+    "timeout_ms": 2000.0
+  },
+  "Y": {
+    "motor": 2,
+    "position_variable": "Motor[2].ActPos",
+    "start_position": 0.0,
+    "target_position": 1000.0,
+    "settle_tolerance": 2.0,
+    "settle_hold_ms": 100.0,
+    "poll_interval_ms": 20.0,
+    "timeout_ms": 2000.0
+  },
+  "Z": {
+    "motor": 3,
+    "position_variable": "Motor[3].ActPos",
+    "start_position": 0.0,
+    "target_position": 500.0,
+    "settle_tolerance": 2.0,
+    "settle_hold_ms": 100.0,
+    "poll_interval_ms": 20.0,
+    "timeout_ms": 2000.0
+  }
+}

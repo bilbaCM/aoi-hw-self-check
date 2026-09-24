@@ -1,0 +1,18 @@
+{
+  "_comment": "TBD 예시 - 실제 Motor 번호/Gate 채널은 설비 PPMAC 설정에 맞춰 교체 필요",
+  "X": {
+    "encoder_count": "Motor[1].ActPos",
+    "pwm_duty_percent": "Motor[1].Pwm",
+    "io_home_sensor": "Motor[1].HomeComplete"
+  },
+  "Y": {
+    "encoder_count": "Motor[2].ActPos",
+    "pwm_duty_percent": "Motor[2].Pwm",
+    "io_home_sensor": "Motor[2].HomeComplete"
+  },
+  "Z": {
+    "encoder_count": "Motor[3].ActPos",
+    "pwm_duty_percent": "Motor[3].Pwm",
+    "io_home_sensor": "Motor[3].HomeComplete"
+  }
+}
