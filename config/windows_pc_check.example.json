@@ -1,0 +1,7 @@
+{
+  "_comment": "TBD 예시 - 실제 서비스명/드라이브/장치명은 설비 PC 구성에 맞춰 교체 필요",
+  "service_names": ["AOI_VisionService", "AOI_MotionService"],
+  "disk_drives": ["C:", "D:"],
+  "device_names": ["frame_grabber_1", "io_board_1"],
+  "error_log_lookback_hours": 24
+}

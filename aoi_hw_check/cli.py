@@ -57,6 +57,11 @@ from aoi_hw_check.integrations.ppmac.motion_tuning_runner import (
     PPMACMotionTuningRunner,
     load_move_specs,
 )
+from aoi_hw_check.integrations.windows_pc.collector import (
+    WindowsPCStateCollector,
+    create_wmi_client,
+)
+from aoi_hw_check.integrations.windows_pc.config import load_pc_check_config
 
 INTERLOCK_EXPECTED_SEQUENCE = [
     "upstream_ready",
@@ -128,6 +133,12 @@ def build_parser() -> argparse.ArgumentParser:
     pc_check = subparsers.add_parser("pc-check", help="PC 동작 Check 실행")
     pc_check.add_argument("--equipment-id", required=True)
     pc_check.add_argument("--db", default="aoi_hw_check.sqlite3")
+    pc_check.add_argument(
+        "--use-wmi",
+        action="store_true",
+        help="WMI로 실제 Windows PC 상태를 수집 (Windows 전용, 미지정 시 Mock 사용)",
+    )
+    pc_check.add_argument("--pc-config", default="config/windows_pc_check.example.json")
 
     motion_check = subparsers.add_parser("motion-hw-check", help="모션 H/W Check 실행")
     motion_check.add_argument("--equipment-id", required=True)
@@ -260,7 +271,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "pc-check":
         store = SQLiteResultStore(args.db)
-        result = run_pc_check(MockPCStateCollector(), store, args.equipment_id)
+        collector = (
+            WindowsPCStateCollector(create_wmi_client(), load_pc_check_config(args.pc_config))
+            if args.use_wmi
+            else MockPCStateCollector()
+        )
+        result = run_pc_check(collector, store, args.equipment_id)
     elif args.command == "motion-hw-check":
         store = SQLiteResultStore(args.db)
         criteria_store = JSONCriteriaStore(args.criteria)
