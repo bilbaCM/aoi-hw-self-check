@@ -21,9 +21,12 @@ from aoi_hw_check.gui_support import (
     format_action_items,
     format_criteria_row,
     format_detail_cell,
+    format_report_row,
     list_criteria_rows,
     list_dangerous_io_points,
+    list_report_files,
     parse_min_max,
+    read_report_text,
     save_criteria_value,
 )
 
@@ -327,6 +330,69 @@ class ListDangerousIoPointsTest(unittest.TestCase):
         self.assertEqual(len(points), 1)
         self.assertEqual(points[0].io_id, "some_new_output_not_in_default_map")
         self.assertEqual(points[0].description, "")
+
+
+class ListReportFilesTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.reports_dir = Path(self._tmpdir.name) / "reports"
+
+    def tearDown(self) -> None:
+        self._tmpdir.cleanup()
+
+    def _write_report(self, equipment_id: str, timestamp: str, content: str = "content") -> None:
+        self.reports_dir.mkdir(parents=True, exist_ok=True)
+        (self.reports_dir / f"{equipment_id}_{timestamp}.log").write_text(content, encoding="utf-8")
+
+    def test_empty_when_reports_dir_is_missing(self) -> None:
+        self.assertEqual(list_report_files(self.reports_dir), [])
+
+    def test_lists_reports_newest_first(self) -> None:
+        self._write_report("EQ01", "20260101_090000")
+        self._write_report("EQ01", "20260102_090000")
+
+        infos = list_report_files(self.reports_dir)
+
+        self.assertEqual([info.measured_at.day for info in infos], [2, 1])
+
+    def test_ignores_files_not_matching_the_report_filename_format(self) -> None:
+        self._write_report("EQ01", "20260101_090000")
+        (self.reports_dir / "not_a_report.txt").write_text("junk", encoding="utf-8")
+
+        infos = list_report_files(self.reports_dir)
+
+        self.assertEqual(len(infos), 1)
+
+    def test_equipment_id_with_underscore_is_parsed_correctly(self) -> None:
+        self._write_report("EQ_01", "20260101_090000")
+
+        infos = list_report_files(self.reports_dir)
+
+        self.assertEqual(len(infos), 1)
+        self.assertEqual(infos[0].equipment_id, "EQ_01")
+
+    def test_equipment_id_filter_keeps_only_exact_matches(self) -> None:
+        self._write_report("EQ01", "20260101_090000")
+        self._write_report("EQ02", "20260101_090000")
+
+        infos = list_report_files(self.reports_dir, equipment_id_filter="EQ02")
+
+        self.assertEqual(len(infos), 1)
+        self.assertEqual(infos[0].equipment_id, "EQ02")
+
+    def test_format_report_row(self) -> None:
+        self._write_report("EQ01", "20260101_090000")
+        info = list_report_files(self.reports_dir)[0]
+
+        row = format_report_row(info)
+
+        self.assertEqual(row, ("EQ01", "2026-01-01 09:00:00", "EQ01_20260101_090000.log"))
+
+    def test_read_report_text_returns_file_contents(self) -> None:
+        self._write_report("EQ01", "20260101_090000", content="hello report")
+        info = list_report_files(self.reports_dir)[0]
+
+        self.assertEqual(read_report_text(info), "hello report")
 
 
 class ParseMinMaxTest(unittest.TestCase):
@@ -863,6 +929,74 @@ class CriteriaGateWindowTest(unittest.TestCase):
         )
         self.assertEqual(reloaded.version, 1)
         dialog.destroy()
+
+
+@unittest.skipUnless(_TK_APP_AVAILABLE, "tkinter 또는 디스플레이를 사용할 수 없는 환경")
+class ReportHistoryWindowTest(unittest.TestCase):
+    def setUp(self) -> None:
+        from aoi_hw_check.gui import HWSelfCheckApp
+
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self._old_cwd = os.getcwd()
+        os.chdir(self._tmpdir.name)
+
+        self.app = HWSelfCheckApp()
+
+    def tearDown(self) -> None:
+        self.app.destroy()
+        os.chdir(self._old_cwd)
+        self._tmpdir.cleanup()
+
+    def _write_report(self, equipment_id: str, timestamp: str, content: str) -> None:
+        reports_dir = Path("reports")
+        reports_dir.mkdir(exist_ok=True)
+        (reports_dir / f"{equipment_id}_{timestamp}.log").write_text(content, encoding="utf-8")
+
+    def _open_window(self):
+        from aoi_hw_check.gui import ReportHistoryWindow
+
+        return ReportHistoryWindow(self.app)
+
+    def test_shows_no_rows_and_a_placeholder_when_nothing_saved(self) -> None:
+        window = self._open_window()
+
+        self.assertEqual(len(window._tree.get_children()), 0)
+        self.assertIn(
+            "저장된 리포트가 없습니다", window._content_text.get("1.0", "end").strip()
+        )
+        window.destroy()
+
+    def test_lists_reports_newest_first_and_shows_content_on_select(self) -> None:
+        self._write_report("EQ01", "20260101_090000", "첫 실행 리포트")
+        self._write_report("EQ01", "20260102_090000", "둘째 실행 리포트")
+
+        window = self._open_window()
+
+        rows = window._tree.get_children()
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(window._tree.item(rows[0], "values")[2], "EQ01_20260102_090000.log")
+
+        window._tree.selection_set(rows[1])
+        window._show_selected()
+
+        self.assertEqual(window._content_text.get("1.0", "end").strip(), "첫 실행 리포트")
+        window.destroy()
+
+    def test_filter_keeps_only_matching_equipment_id(self) -> None:
+        self._write_report("EQ01", "20260101_090000", "EQ01 리포트")
+        self._write_report("EQ02", "20260101_090000", "EQ02 리포트")
+
+        window = self._open_window()
+        window._filter_var.set("EQ02")
+        window._reload()
+
+        rows = window._tree.get_children()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(window._tree.item(rows[0], "values")[0], "EQ02")
+        window.destroy()
+
+    def test_main_window_can_open_report_history(self) -> None:
+        self.app._open_report_history()
 
 
 if __name__ == "__main__":

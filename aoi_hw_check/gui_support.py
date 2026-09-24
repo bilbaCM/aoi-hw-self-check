@@ -8,8 +8,11 @@
 from __future__ import annotations
 
 import argparse
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
 
 from aoi_hw_check.checks.io_check.client import DEFAULT_IO_MAP
 from aoi_hw_check.checks.io_check.danger_list import load_dangerous_io_ids
@@ -263,3 +266,57 @@ def list_dangerous_io_points() -> list[IOPoint]:
         by_id.get(io_id, IOPoint(io_id, None, None, ""))
         for io_id in sorted(dangerous_ids)
     ]
+
+
+# cli_output.py의 save_run_report 기본값과 동일한 폴더.
+REPORTS_DIR = "reports"
+
+# save_run_report가 만드는 파일명 "<설비ID>_<YYYYMMDD_HHMMSS>.log"에서 설비
+# ID를 뽑아낸다 — 설비 ID 자체에 밑줄이 들어 있어도 날짜/시각은 자릿수가
+# 고정이라 안전하게 구분할 수 있다.
+_REPORT_FILENAME_RE = re.compile(r"^(?P<equipment_id>.+)_(?P<date>\d{8})_(?P<time>\d{6})\.log$")
+
+
+@dataclass(frozen=True)
+class ReportFileInfo:
+    path: Path
+    equipment_id: str
+    measured_at: datetime
+
+
+def list_report_files(
+    reports_dir: str | Path = REPORTS_DIR, equipment_id_filter: str = ""
+) -> list[ReportFileInfo]:
+    """저장된 리포트 파일 목록을, 최신 실행이 먼저 오도록 정렬해 반환한다.
+
+    폴더가 없으면(아직 한 번도 실행 안 함) 빈 리스트. equipment_id_filter를
+    주면 그 설비 ID와 정확히 일치하는 것만 남긴다(빈 문자열이면 전체).
+    파일명 형식(위 정규식)과 맞지 않는 파일은 조용히 건너뛴다.
+    """
+    directory = Path(reports_dir)
+    if not directory.exists():
+        return []
+
+    infos = []
+    for path in sorted(directory.glob("*.log")):
+        match = _REPORT_FILENAME_RE.match(path.name)
+        if not match:
+            continue
+        if equipment_id_filter and match.group("equipment_id") != equipment_id_filter:
+            continue
+        measured_at = datetime.strptime(
+            match.group("date") + match.group("time"), "%Y%m%d%H%M%S"
+        )
+        infos.append(
+            ReportFileInfo(path=path, equipment_id=match.group("equipment_id"), measured_at=measured_at)
+        )
+
+    return sorted(infos, key=lambda info: info.measured_at, reverse=True)
+
+
+def format_report_row(info: ReportFileInfo) -> tuple[str, str, str]:
+    return (info.equipment_id, info.measured_at.strftime("%Y-%m-%d %H:%M:%S"), info.path.name)
+
+
+def read_report_text(info: ReportFileInfo) -> str:
+    return info.path.read_text(encoding="utf-8")

@@ -10,7 +10,9 @@
 
 from __future__ import annotations
 
+import os
 import queue
+import sys
 import threading
 import tkinter as tk
 from datetime import datetime
@@ -22,6 +24,7 @@ from aoi_hw_check.cli_output import PROGRAM_NAME
 from aoi_hw_check.gui_support import (
     DEFAULT_EQUIPMENT_ID,
     GATE_COLUMNS,
+    REPORTS_DIR,
     SELECTABLE_ITEMS,
     VERDICT_COLOR,
     VERDICT_LABEL,
@@ -32,10 +35,13 @@ from aoi_hw_check.gui_support import (
     format_action_items,
     format_criteria_row,
     format_detail_cell,
+    format_report_row,
     list_criteria_rows,
     list_dangerous_io_points,
+    list_report_files,
     next_status,
     parse_min_max,
+    read_report_text,
     save_criteria_value,
 )
 
@@ -79,6 +85,9 @@ class HWSelfCheckApp(tk.Tk):
             side="right"
         )
         ttk.Button(top, text="연동 설정...", command=self._open_connection_settings).pack(
+            side="right", padx=(0, 6)
+        )
+        ttk.Button(top, text="리포트 열람...", command=self._open_report_history).pack(
             side="right", padx=(0, 6)
         )
 
@@ -318,6 +327,9 @@ class HWSelfCheckApp(tk.Tk):
     def _apply_connection_inputs(self, inputs: ConnectionInputs) -> None:
         self._connection_inputs = inputs
         self._connection_summary_var.set(describe_connection_inputs(inputs))
+
+    def _open_report_history(self) -> None:
+        ReportHistoryWindow(self)
 
 
 class CriteriaGateWindow(tk.Toplevel):
@@ -620,6 +632,118 @@ class ConnectionSettingsDialog(tk.Toplevel):
 
         self.destroy()
         self._on_saved(candidate)
+
+
+class ReportHistoryWindow(tk.Toplevel):
+    """`reports/` 폴더에 저장된 과거 실행 리포트를 목록에서 골라 내용을 읽어보는 창.
+
+    표시만 하며, 아무것도 고치거나 지우지 않는다.
+    """
+
+    def __init__(self, master: tk.Misc) -> None:
+        super().__init__(master)
+        self.title("리포트 열람")
+        self.geometry("820x520")
+        self.transient(master)
+
+        self._reports: list = []  # list_report_files()가 반환한 ReportFileInfo — 선택된 항목 조회용
+        self._build_widgets()
+        self._reload()
+
+    def _build_widgets(self) -> None:
+        top = ttk.Frame(self, padding=10)
+        top.pack(fill="x")
+
+        ttk.Label(top, text="설비 ID 필터:").pack(side="left")
+        self._filter_var = tk.StringVar(value="")
+        filter_entry = ttk.Entry(top, textvariable=self._filter_var, width=14)
+        filter_entry.pack(side="left", padx=(4, 6))
+        filter_entry.bind("<Return>", lambda _event: self._reload())
+        ttk.Button(top, text="필터", command=self._reload).pack(side="left")
+        ttk.Button(
+            top, text="전체 보기", command=lambda: (self._filter_var.set(""), self._reload())
+        ).pack(side="left", padx=(4, 0))
+
+        ttk.Button(top, text="새로고침", command=self._reload).pack(side="right")
+        ttk.Button(top, text="폴더 열기", command=self._open_reports_folder).pack(
+            side="right", padx=(0, 6)
+        )
+
+        body = ttk.Frame(self)
+        body.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+        list_frame = ttk.Frame(body)
+        list_frame.pack(side="left", fill="y")
+
+        columns = ("equipment_id", "measured_at", "filename")
+        self._tree = ttk.Treeview(
+            list_frame, columns=columns, show="headings", height=20, selectmode="browse"
+        )
+        self._tree.heading("equipment_id", text="설비 ID")
+        self._tree.heading("measured_at", text="실행 시각")
+        self._tree.heading("filename", text="파일명")
+        self._tree.column("equipment_id", width=80, anchor="w", stretch=False)
+        self._tree.column("measured_at", width=140, anchor="w", stretch=False)
+        self._tree.column("filename", width=180, anchor="w", stretch=False)
+        self._tree.pack(side="left", fill="y")
+        self._tree.bind("<<TreeviewSelect>>", lambda _event: self._show_selected())
+
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self._tree.yview)
+        scrollbar.pack(side="left", fill="y")
+        self._tree.configure(yscrollcommand=scrollbar.set)
+
+        content_frame = ttk.LabelFrame(body, text="내용", padding=6)
+        content_frame.pack(side="left", fill="both", expand=True, padx=(10, 0))
+        self._content_text = tk.Text(
+            content_frame, wrap="none", state="disabled", font="TkFixedFont"
+        )
+        self._content_text.pack(fill="both", expand=True)
+
+    def _reload(self) -> None:
+        self._tree.delete(*self._tree.get_children())
+        self._reports = list_report_files(equipment_id_filter=self._filter_var.get().strip())
+        for info in self._reports:
+            self._tree.insert("", "end", values=format_report_row(info))
+        self._set_content("")
+        if not self._reports:
+            self._set_content("저장된 리포트가 없습니다.")
+
+    def _selected_report(self):
+        selection = self._tree.selection()
+        if not selection:
+            return None
+        index = self._tree.index(selection[0])
+        return self._reports[index]
+
+    def _show_selected(self) -> None:
+        info = self._selected_report()
+        if info is None:
+            return
+        try:
+            text = read_report_text(info)
+        except OSError as exc:
+            self._set_content(f"파일을 읽을 수 없습니다: {exc}")
+            return
+        self._set_content(text)
+
+    def _set_content(self, text: str) -> None:
+        self._content_text.configure(state="normal")
+        self._content_text.delete("1.0", "end")
+        self._content_text.insert("1.0", text)
+        self._content_text.configure(state="disabled")
+
+    def _open_reports_folder(self) -> None:
+        # Windows 전용 기능 — 다른 OS(예: 이 저장소의 개발 컨테이너)에서는 조용히
+        # 안내만 하고 실패하지 않는다.
+        os.makedirs(REPORTS_DIR, exist_ok=True)
+        if sys.platform == "win32":
+            os.startfile(os.path.abspath(REPORTS_DIR))  # noqa: S606
+        else:
+            messagebox.showinfo(
+                "리포트 열람",
+                f"리포트 폴더 위치:\n{os.path.abspath(REPORTS_DIR)}",
+                parent=self,
+            )
 
 
 def main() -> int:
