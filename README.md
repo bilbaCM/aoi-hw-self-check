@@ -80,7 +80,10 @@ aoi_hw_check/
     windows_pc/                     # PC 동작 Check — WMI + Get-WinEvent
     ndjson_connection.py               # TCP/NDJSON 공통 연결 로직 (재사용)
 
-  cli.py                    # 전 항목 실행 진입점
+  cli.py                    # 전 항목 실행 진입점 (CLI)
+  cli_output.py             # CLI 배너/색상 출력, 리포트 파일 저장
+  gui.py                    # 전 항목 실행 진입점 (Tkinter GUI, cli.execute_run_all 재사용)
+  gui_support.py            # GUI의 tkinter 비의존 로직 (표시용 포맷팅, run-all 인자 구성)
 
 config/                    # 사람이 정의하는 설정 파일 (전부 *.example.json, 값은 TBD)
 tests/                     # 항목당 최소 1개 테스트 파일, 전 항목 Mock/대역 객체로 검증
@@ -88,12 +91,20 @@ tests/                     # 항목당 최소 1개 테스트 파일, 전 항목 
 
 ## 실행 방법
 
-**Windows에서 한 번에 실행**: 저장소 루트의 `run.bat`을 더블클릭하면 설비 ID를
-물어본 뒤 13개 항목을 전부 실행하고 조치 대상 목록까지 보여줍니다 (Mock 모드).
-콘솔 창 제목과 배너에 프로그램 이름·버전이 표시되고, PASS/FAIL/NA는 색으로
-구분됩니다. 실행마다 `reports/<설비ID>_<타임스탬프>.log`로 결과가 자동
-저장되어 감사 이력으로 남습니다 (색상 코드 없는 평문). 색상이 방해되면
-`set NO_COLOR=1`을 실행 전에 설정하면 꺼집니다.
+**Windows에서 GUI로 실행**: 저장소 루트의 `run_gui.bat`을 더블클릭하면 창이
+뜹니다. 설비 ID를 입력하고 "전체 실행" 버튼을 누르면 13개 항목이 Mock으로
+전부 실행되고, 결과가 PASS/FAIL/NA 색으로 구분된 표와 조치 대상 목록으로
+표시됩니다. 표준 라이브러리 Tkinter만 사용하므로 추가 설치가 필요 없습니다.
+GUI도 CLI와 동일하게 매 실행 결과를 `reports/<설비ID>_<타임스탬프>.log`에
+저장합니다. 실제 설비 연동(제어 프로그램/PPMAC/검사 프로그램 TCP 접속, WMI)은
+아직 GUI 범위 밖이며 CLI에서만 지원합니다 — GUI는 항상 Mock으로 실행됩니다.
+
+**Windows에서 콘솔로 한 번에 실행**: 저장소 루트의 `run.bat`을 더블클릭하면
+설비 ID를 물어본 뒤 13개 항목을 전부 실행하고 조치 대상 목록까지 보여줍니다
+(Mock 모드). 콘솔 창 제목과 배너에 프로그램 이름·버전이 표시되고,
+PASS/FAIL/NA는 색으로 구분됩니다. 실행마다 `reports/<설비ID>_<타임스탬프>.log`로
+결과가 자동 저장되어 감사 이력으로 남습니다 (색상 코드 없는 평문). 색상이
+방해되면 `set NO_COLOR=1`을 실행 전에 설정하면 꺼집니다.
 
 **명령줄에서 실행**:
 

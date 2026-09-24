@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
+from pathlib import Path
 
 from aoi_hw_check.cli_output import (
     enable_windows_ansi,
@@ -297,15 +299,34 @@ def _print_result(result: CheckResult) -> None:
     print_result(result)
 
 
-def _run_all(args: argparse.Namespace) -> int:
-    """13개 항목을 순서대로 전부 실행하고, 마지막에 조치 대상 목록을 출력한다.
+@dataclass(frozen=True)
+class RunAllOutcome:
+    """execute_run_all()의 결과 — CLI 텍스트 출력/GUI 표시 등 렌더링 방식과 무관한 순수 데이터."""
+
+    results: list[CheckResult]
+    """A/B분류 7항목의 결과 (실행 순서대로)."""
+    c_class_detail: str
+    c_class_results: list[CheckResult]
+    """C분류 6항목의 결과 (기준 시료 1회 Scan 공유)."""
+    action_items: list[CheckResult]
+    escalated: bool
+    """C분류 재Scan 상한 초과로 작업자 개입이 필요한 상태인지."""
+    report_path: Path
+
+    @property
+    def all_results(self) -> list[CheckResult]:
+        """13개 항목 전체 결과 (실행 순서대로) — 리포트 저장에 쓰인 것과 동일한 목록."""
+        return [*self.results, *self.c_class_results]
+
+
+def execute_run_all(args: argparse.Namespace) -> RunAllOutcome:
+    """13개 항목을 순서대로 전부 실행하고 리포트 파일까지 저장한다 (화면 출력은 하지 않음).
 
     지정된 연동 옵션(--control-program-host, --ppmac-host,
     --inspection-program-host, --use-wmi)에 따라 항목별로 실제 구현체 또는
-    Mock을 사용한다 (개별 서브커맨드와 동일한 규칙).
+    Mock을 사용한다 (개별 서브커맨드와 동일한 규칙). CLI(`_run_all`)와
+    GUI(`aoi_hw_check.gui`)가 이 함수를 공유한다.
     """
-    print_banner(args.equipment_id)
-
     store = SQLiteResultStore(args.db)
     control_connection = _control_program_connection(args)
     ppmac_connection = _ppmac_connection(args)
@@ -423,27 +444,45 @@ def _run_all(args: argparse.Namespace) -> int:
         max_scan_attempts=args.max_scan_attempts,
     )
 
-    for result in results:
+    action_item_list = build_action_item_list(store, args.equipment_id)
+    report_path = save_run_report(
+        args.equipment_id, [*results, *c_class_outcome.results], action_item_list
+    )
+
+    return RunAllOutcome(
+        results=results,
+        c_class_detail=c_class_outcome.detail,
+        c_class_results=c_class_outcome.results,
+        action_items=action_item_list,
+        escalated=c_class_outcome.escalated,
+        report_path=report_path,
+    )
+
+
+def _run_all(args: argparse.Namespace) -> int:
+    """13개 항목을 순서대로 전부 실행하고, 마지막에 조치 대상 목록을 출력한다."""
+    print_banner(args.equipment_id)
+
+    outcome = execute_run_all(args)
+
+    for result in outcome.results:
         _print_result(result)
-    print(f"[C분류] {c_class_outcome.detail}")
-    for result in c_class_outcome.results:
+    print(f"[C분류] {outcome.c_class_detail}")
+    for result in outcome.c_class_results:
         _print_result(result)
-    results.extend(c_class_outcome.results)
 
     print()
-    action_item_list = build_action_item_list(store, args.equipment_id)
-    if action_item_list:
-        print(f"{args.equipment_id} 조치 대상 목록 ({len(action_item_list)}건)")
-        for item in action_item_list:
+    if outcome.action_items:
+        print(f"{args.equipment_id} 조치 대상 목록 ({len(outcome.action_items)}건)")
+        for item in outcome.action_items:
             print(f"  {format_verdict_badge(item.verdict)} {item.check_item}: {item.detail}")
     else:
         print(f"{args.equipment_id}: 조치 대상 없음 — 셋업 착수 가능")
 
-    report_path = save_run_report(args.equipment_id, results, action_item_list)
     print()
-    print(f"결과가 {report_path} 에 저장되었습니다.")
+    print(f"결과가 {outcome.report_path} 에 저장되었습니다.")
 
-    return 1 if action_item_list or c_class_outcome.escalated else 0
+    return 1 if outcome.action_items or outcome.escalated else 0
 
 
 def main(argv: list[str] | None = None) -> int:
