@@ -115,7 +115,7 @@ python3 -m aoi_hw_check.cli <command> --help
 
 | 대상 | 옵션 | 비고 |
 |---|---|---|
-| I/O Check, 단동 동작, 연동 동작 | `--control-program-host/-port` | C# 제어 프로그램(CC-Link) — 프로토콜은 `integrations/control_program/protocol.py` 참고, 서버 구현 필요 |
+| I/O Check, 단동 동작, 연동 동작 | `--control-program-host/-port` | C# 제어 프로그램(CC-Link) — 프로토콜은 `integrations/control_program/protocol.py` 또는 [`docs/control_program_protocol.md`](docs/control_program_protocol.md)(C# 개발자 전달용) 참고, 서버 구현 필요 |
 | 모션 H/W Check, 모션 Tuning | `--ppmac-host/-port` | PPMAC LAN 직결 — 실기 프로토콜 세부(ACK/BELL 바이트, 축 매핑) 검증 필요 |
 | 광학 부품 확인, C분류 Scan | `--inspection-program-host/-port` | C++ 검사 프로그램 — 프로토콜은 `integrations/inspection_program/protocol.py` 참고, 서버 구현 필요 |
 | PC 동작 Check | `--use-wmi` | Windows 전용(`pip install wmi pywin32`), 실기 스모크 테스트 필요 |
