@@ -15,6 +15,7 @@ import queue
 import sys
 import threading
 import tkinter as tk
+import tkinter.font as tkfont
 from datetime import datetime
 from tkinter import messagebox, ttk
 
@@ -28,6 +29,7 @@ from aoi_hw_check.gui_support import (
     SELECTABLE_ITEMS,
     VERDICT_COLOR,
     VERDICT_LABEL,
+    VERDICT_ROW_BACKGROUND,
     ConnectionInputs,
     advance_criteria_gate,
     build_connected_run_all_args,
@@ -45,6 +47,54 @@ from aoi_hw_check.gui_support import (
     save_criteria_value,
 )
 
+_MUTED_TEXT_COLOR = "#555555"
+
+# 상태 표시줄 색상 — 판정 색(VERDICT_COLOR)과 톤을 맞췄다.
+_STATUS_NEUTRAL_COLOR = "#1f2328"
+_STATUS_RUNNING_COLOR = "#0969da"
+_STATUS_DONE_COLOR = "#1a7f37"
+_STATUS_ERROR_COLOR = "#cf222e"
+_STATUS_WARNING_COLOR = "#9a6700"
+
+
+def _apply_theme(root: tk.Tk) -> ttk.Style:
+    """가능하면 OS 네이티브에 가까운 ttk 테마를 쓰고, 표/섹션 제목 글꼴과
+    판정별 행 배경까지 한 번에 설정한다. Windows에서는 "vista" 테마가 있으면
+    그걸 쓰고, 없으면 순서대로 다음 테마로 넘어간다 — 어떤 환경이든 항상
+    뭔가는 적용된다.
+    """
+    style = ttk.Style(root)
+    for theme in ("vista", "xpnative", "clam", "alt", "default"):
+        if theme in style.theme_names():
+            style.theme_use(theme)
+            break
+
+    default_font = tkfont.nametofont("TkDefaultFont")
+    header_font = default_font.copy()
+    header_font.configure(weight="bold", size=default_font.cget("size") + 1)
+    # 폰트 객체가 가비지 컬렉션되지 않도록 root에 붙잡아 둔다.
+    root._header_font = header_font  # type: ignore[attr-defined]
+
+    style.configure("TLabelframe.Label", font=header_font)
+    style.configure(
+        "Danger.TLabelframe.Label", font=header_font, foreground=_STATUS_WARNING_COLOR
+    )
+    style.configure("Treeview", rowheight=24)
+    style.configure(
+        "Treeview.Heading",
+        font=(default_font.cget("family"), default_font.cget("size"), "bold"),
+    )
+    return style
+
+
+def _center_window(win: tk.Tk | tk.Toplevel, width: int, height: int) -> None:
+    win.update_idletasks()
+    screen_width = win.winfo_screenwidth()
+    screen_height = win.winfo_screenheight()
+    x = max((screen_width - width) // 2, 0)
+    y = max((screen_height - height) // 3, 0)  # 정중앙보다 살짝 위가 자연스럽다
+    win.geometry(f"{width}x{height}+{x}+{y}")
+
 
 class HWSelfCheckApp(tk.Tk):
     """13개 항목 run-all을 버튼 클릭으로 실행하고 결과를 표로 보여주는 메인 창."""
@@ -52,8 +102,9 @@ class HWSelfCheckApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title(f"{PROGRAM_NAME} (v{__version__})")
-        self.geometry("900x620")
-        self.minsize(760, 480)
+        _apply_theme(self)
+        self.minsize(820, 540)
+        _center_window(self, 980, 680)
 
         self._result_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self._connection_inputs = ConnectionInputs()
@@ -79,7 +130,10 @@ class HWSelfCheckApp(tk.Tk):
         self._cancel_button.pack(side="left", padx=(6, 0))
 
         self._status_var = tk.StringVar(value="대기 중")
-        ttk.Label(top, textvariable=self._status_var).pack(side="left", padx=12)
+        self._status_label = ttk.Label(
+            top, textvariable=self._status_var, foreground=_STATUS_NEUTRAL_COLOR
+        )
+        self._status_label.pack(side="left", padx=12)
 
         ttk.Button(top, text="기준값 Gate 관리...", command=self._open_gate_window).pack(
             side="right"
@@ -91,12 +145,14 @@ class HWSelfCheckApp(tk.Tk):
             side="right", padx=(0, 6)
         )
 
-        conn_bar = ttk.Frame(self, padding=(10, 0, 10, 6))
+        ttk.Separator(self, orient="horizontal").pack(fill="x", padx=10)
+
+        conn_bar = ttk.Frame(self, padding=(10, 6, 10, 6))
         conn_bar.pack(fill="x")
         self._connection_summary_var = tk.StringVar(
             value=describe_connection_inputs(self._connection_inputs)
         )
-        ttk.Label(conn_bar, textvariable=self._connection_summary_var, foreground="#555555").pack(
+        ttk.Label(conn_bar, textvariable=self._connection_summary_var, foreground=_MUTED_TEXT_COLOR).pack(
             anchor="w"
         )
 
@@ -134,7 +190,9 @@ class HWSelfCheckApp(tk.Tk):
                 selection_frame, text=label, variable=var, style="Selectable.TCheckbutton"
             ).pack(anchor="w", pady=1)
 
-        danger_frame = ttk.LabelFrame(sidebar, text="위험 I/O 승인 (I/O Check)", padding=8)
+        danger_frame = ttk.LabelFrame(
+            sidebar, text="위험 I/O 승인 (I/O Check)", padding=8, style="Danger.TLabelframe"
+        )
         danger_frame.pack(fill="x", pady=(10, 0))
 
         self._danger_points = list_dangerous_io_points()
@@ -143,7 +201,7 @@ class HWSelfCheckApp(tk.Tk):
             ttk.Label(
                 danger_frame,
                 text="체크한 항목만 승인되어 실제로 구동됩니다.\n체크하지 않으면 계속 NA로 남습니다.",
-                foreground="#555555",
+                foreground=_MUTED_TEXT_COLOR,
                 justify="left",
                 wraplength=240,
             ).pack(anchor="w", pady=(0, 4))
@@ -155,7 +213,7 @@ class HWSelfCheckApp(tk.Tk):
                     danger_frame, text=label, variable=var, style="Selectable.TCheckbutton"
                 ).pack(anchor="w", pady=1)
         else:
-            ttk.Label(danger_frame, text="등록된 위험 출력 없음", foreground="#555555").pack(
+            ttk.Label(danger_frame, text="등록된 위험 출력 없음", foreground=_MUTED_TEXT_COLOR).pack(
                 anchor="w"
             )
 
@@ -167,13 +225,20 @@ class HWSelfCheckApp(tk.Tk):
         self._tree.heading("verdict", text="판정")
         self._tree.heading("check_item", text="항목")
         self._tree.heading("detail", text="상세")
-        self._tree.column("verdict", width=70, anchor="center", stretch=False)
+        self._tree.column("verdict", width=90, anchor="center", stretch=False)
         self._tree.column("check_item", width=220, anchor="w", stretch=False)
         self._tree.column("detail", width=560, anchor="w")
         self._tree.pack(fill="both", expand=True, pady=(0, 10))
 
+        default_font = tkfont.nametofont("TkDefaultFont")
+        verdict_font = (default_font.cget("family"), default_font.cget("size"), "bold")
         for verdict, color in VERDICT_COLOR.items():
-            self._tree.tag_configure(verdict.value, foreground=color)
+            self._tree.tag_configure(
+                verdict.value,
+                foreground=color,
+                background=VERDICT_ROW_BACKGROUND[verdict],
+                font=verdict_font,
+            )
 
         action_frame = ttk.LabelFrame(content, text="조치 대상 목록", padding=8)
         action_frame.pack(fill="both", expand=False, pady=(0, 10))
@@ -181,7 +246,7 @@ class HWSelfCheckApp(tk.Tk):
         self._action_text.pack(fill="both", expand=True)
 
         self._report_var = tk.StringVar(value="")
-        ttk.Label(content, textvariable=self._report_var, foreground="#555555").pack(anchor="w")
+        ttk.Label(content, textvariable=self._report_var, foreground=_MUTED_TEXT_COLOR).pack(anchor="w")
 
     def _set_all_items(self, checked: bool) -> None:
         for var in self._item_vars.values():
@@ -226,9 +291,10 @@ class HWSelfCheckApp(tk.Tk):
         self._run_button.state(["disabled"])
         self._cancel_button.state(["!disabled"])
         self._progress.configure(maximum=max(len(selected_keys), 1), value=0)
-        self._status_var.set(
+        self._set_status(
             f"실행 중 (0/{len(selected_keys)}개 항목, "
-            f"{describe_connection_inputs(self._connection_inputs)})..."
+            f"{describe_connection_inputs(self._connection_inputs)})...",
+            _STATUS_RUNNING_COLOR,
         )
         self._tree.delete(*self._tree.get_children())
         self._set_action_text("")
@@ -245,7 +311,9 @@ class HWSelfCheckApp(tk.Tk):
     def _on_cancel_clicked(self) -> None:
         self._cancel_event.set()
         self._cancel_button.state(["disabled"])
-        self._status_var.set("취소 요청됨 — 현재 실행 중인 항목을 마치고 중단합니다...")
+        self._set_status(
+            "취소 요청됨 — 현재 실행 중인 항목을 마치고 중단합니다...", _STATUS_WARNING_COLOR
+        )
 
     def _run_in_background(
         self, equipment_id: str, args, selected_keys: set[str], total: int
@@ -278,14 +346,14 @@ class HWSelfCheckApp(tk.Tk):
             label, total = payload
             self._progress.configure(value=self._progress["value"] + 1)
             done = int(self._progress["value"])
-            self._status_var.set(f"실행 중 ({done}/{total}개 항목)... 방금 완료: {label}")
+            self._set_status(f"실행 중 ({done}/{total}개 항목)... 방금 완료: {label}", _STATUS_RUNNING_COLOR)
             self.after(100, self._poll_result_queue)
             return
 
         self._run_button.state(["!disabled"])
         self._cancel_button.state(["disabled"])
         if kind == "error":
-            self._status_var.set("오류 발생")
+            self._set_status("오류 발생", _STATUS_ERROR_COLOR)
             messagebox.showerror(PROGRAM_NAME, f"실행 중 오류가 발생했습니다:\n{payload}")
             return
 
@@ -305,12 +373,22 @@ class HWSelfCheckApp(tk.Tk):
 
         if outcome.cancelled:
             status = f"취소됨 ({len(outcome.all_results)}개 항목까지 실행)"
+            color = _STATUS_WARNING_COLOR
+        elif outcome.escalated:
+            status = (
+                "완료 (" + datetime.now().strftime("%H:%M:%S") + ")"
+                " — C분류 재Scan 상한 초과, 작업자 개입 필요"
+            )
+            color = _STATUS_WARNING_COLOR
         else:
             status = "완료 (" + datetime.now().strftime("%H:%M:%S") + ")"
-            if outcome.escalated:
-                status += " — C분류 재Scan 상한 초과, 작업자 개입 필요"
-        self._status_var.set(status)
+            color = _STATUS_DONE_COLOR
+        self._set_status(status, color)
         self._report_var.set(f"결과 저장 위치: {outcome.report_path}")
+
+    def _set_status(self, text: str, color: str = _STATUS_NEUTRAL_COLOR) -> None:
+        self._status_var.set(text)
+        self._status_label.configure(foreground=color)
 
     def _set_action_text(self, content: str) -> None:
         self._action_text.configure(state="normal")
@@ -344,7 +422,7 @@ class CriteriaGateWindow(tk.Toplevel):
     def __init__(self, master: tk.Misc) -> None:
         super().__init__(master)
         self.title("기준값 Gate 관리")
-        self.geometry("900x480")
+        _center_window(self, 900, 480)
         self.transient(master)
 
         self._rows: list[tuple[str, object]] = []  # (store_path, Criteria) — 선택된 항목 조회용
@@ -357,7 +435,7 @@ class CriteriaGateWindow(tk.Toplevel):
         ttk.Label(
             top,
             text="행을 고르고 값을 수정하거나 Gate를 다음 단계로 전진시키세요 (더블클릭으로도 값 수정).",
-            foreground="#555555",
+            foreground=_MUTED_TEXT_COLOR,
         ).pack(side="left")
         ttk.Button(top, text="새로고침", command=self._reload).pack(side="right")
 
@@ -489,6 +567,7 @@ class EditCriteriaDialog(tk.Toplevel):
         self.transient(master)
         self.resizable(False, False)
         self._build_widgets()
+        _center_window(self, self.winfo_reqwidth(), self.winfo_reqheight())
         self.grab_set()
 
     def _build_widgets(self) -> None:
@@ -511,7 +590,7 @@ class EditCriteriaDialog(tk.Toplevel):
         ttk.Label(
             frame,
             text="저장하면 새 버전(GENERATED)으로 등록되어 Gate 검증을\n처음부터 다시 거쳐야 합니다.",
-            foreground="#555555",
+            foreground=_MUTED_TEXT_COLOR,
             justify="left",
         ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 8))
 
@@ -559,6 +638,7 @@ class ConnectionSettingsDialog(tk.Toplevel):
         self.transient(master)
         self.resizable(False, False)
         self._build_widgets(current)
+        _center_window(self, self.winfo_reqwidth(), self.winfo_reqheight())
         self.grab_set()
 
     def _build_widgets(self, current: ConnectionInputs) -> None:
@@ -568,7 +648,7 @@ class ConnectionSettingsDialog(tk.Toplevel):
         ttk.Label(
             frame,
             text="호스트를 비워두면 그 항목은 Mock으로 실행됩니다.",
-            foreground="#555555",
+            foreground=_MUTED_TEXT_COLOR,
         ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
 
         self._control_host_var = tk.StringVar(value=current.control_program_host)
@@ -643,7 +723,7 @@ class ReportHistoryWindow(tk.Toplevel):
     def __init__(self, master: tk.Misc) -> None:
         super().__init__(master)
         self.title("리포트 열람")
-        self.geometry("820x520")
+        _center_window(self, 900, 560)
         self.transient(master)
 
         self._reports: list = []  # list_report_files()가 반환한 ReportFileInfo — 선택된 항목 조회용

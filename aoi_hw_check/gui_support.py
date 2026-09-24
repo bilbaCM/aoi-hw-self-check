@@ -28,8 +28,11 @@ from aoi_hw_check.core.gate import next_status
 from aoi_hw_check.core.models import CheckResult, GateStatus, Verdict
 from aoi_hw_check.core.thresholds import Criteria, JSONCriteriaStore
 
-VERDICT_LABEL = {Verdict.PASS: "PASS", Verdict.FAIL: "FAIL", Verdict.NA: "NA"}
+VERDICT_LABEL = {Verdict.PASS: "● PASS", Verdict.FAIL: "● FAIL", Verdict.NA: "● NA"}
 VERDICT_COLOR = {Verdict.PASS: "#1a7f37", Verdict.FAIL: "#cf222e", Verdict.NA: "#9a6700"}
+# 표 행 배경 — 위 VERDICT_COLOR를 옅게 탄 색. 판정별로 행 전체가 은은하게
+# 구분되도록 해서, 글자색만으로 훑는 것보다 한눈에 스캔하기 쉽게 한다.
+VERDICT_ROW_BACKGROUND = {Verdict.PASS: "#eaf7ee", Verdict.FAIL: "#fdecea", Verdict.NA: "#fff8e1"}
 
 DEFAULT_EQUIPMENT_ID = "EQ01"
 
