@@ -22,6 +22,7 @@ from aoi_hw_check.checks.pc_check.judge import run_pc_check
 from aoi_hw_check.checks.single_unit_check.judge import run_single_unit_check
 from aoi_hw_check.checks.single_unit_check.runner import MockSingleUnitSequenceRunner
 from aoi_hw_check.core.models import CheckResult, Verdict
+from aoi_hw_check.core.report import build_action_item_list
 from aoi_hw_check.core.storage import SQLiteResultStore
 from aoi_hw_check.core.thresholds import JSONCriteriaStore
 
@@ -94,6 +95,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="개발/테스트용 예시 지연 기준을 등록한 뒤 실행 (실제 운영 로그 실측치 아님)",
     )
 
+    action_items = subparsers.add_parser(
+        "action-items", help="셋업 착수 전 조치 대상 목록 출력"
+    )
+    action_items.add_argument("--equipment-id", required=True)
+    action_items.add_argument("--db", default="aoi_hw_check.sqlite3")
+
     return parser
 
 
@@ -160,6 +167,16 @@ def main(argv: list[str] | None = None) -> int:
             store,
             args.equipment_id,
         )
+    elif args.command == "action-items":
+        store = SQLiteResultStore(args.db)
+        items = build_action_item_list(store, args.equipment_id)
+        if not items:
+            print(f"{args.equipment_id}: 조치 대상 없음")
+            return 0
+        print(f"{args.equipment_id} 조치 대상 목록 ({len(items)}건)")
+        for item in items:
+            print(f"  [{item.verdict.value}] {item.check_item}: {item.detail}")
+        return 1
     else:
         return 1
 

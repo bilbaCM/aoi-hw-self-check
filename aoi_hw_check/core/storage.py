@@ -34,6 +34,13 @@ class ResultStore(ABC):
         self, equipment_id: str, check_item: str
     ) -> list[dict[str, Any]]: ...
 
+    def get_latest_results(self, equipment_id: str) -> dict[str, CheckResult]:
+        """설비의 각 판정 항목별 가장 최근 결과만 모아 반환한다 (항목명 -> 결과)."""
+        latest: dict[str, CheckResult] = {}
+        for result in self.list_results(equipment_id=equipment_id):
+            latest[result.check_item] = result
+        return latest
+
 
 class SQLiteResultStore(ResultStore):
     def __init__(self, db_path: str | Path):
@@ -106,7 +113,7 @@ class SQLiteResultStore(ResultStore):
         if check_item is not None:
             query += " AND check_item = ?"
             params.append(check_item)
-        query += " ORDER BY measured_at"
+        query += " ORDER BY measured_at, id"
         with self._connect() as conn:
             rows = conn.execute(query, params).fetchall()
         return [self._row_to_result(row) for row in rows]
