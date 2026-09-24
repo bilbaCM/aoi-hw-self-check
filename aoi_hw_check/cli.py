@@ -243,6 +243,36 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_ppmac_args(motion_tuning_check)
 
+    run_all = subparsers.add_parser(
+        "run-all", help="H/W Self-Check 13개 항목을 전부 실행하고 조치 대상 목록까지 출력"
+    )
+    run_all.add_argument("--equipment-id", required=True)
+    run_all.add_argument("--db", default="aoi_hw_check.sqlite3")
+    run_all.add_argument(
+        "--seed-example-criteria",
+        action="store_true",
+        help="전 항목의 개발/테스트용 예시 기준을 등록한 뒤 실행 (실측치 아님)",
+    )
+    run_all.add_argument(
+        "--supervised",
+        action="store_true",
+        help="설비 단동 동작 확인의 최초 구동을 작업자 감독 하에 승인",
+    )
+    run_all.add_argument(
+        "--danger-list", default="config/io_check_danger_list.example.json"
+    )
+    run_all.add_argument("--approve-dangerous", default="")
+    run_all.add_argument("--axis-map", default="config/ppmac_axis_map.example.json")
+    run_all.add_argument(
+        "--move-specs", default="config/ppmac_tuning_moves.example.json"
+    )
+    run_all.add_argument("--max-scan-attempts", type=int, default=3)
+    run_all.add_argument("--use-wmi", action="store_true")
+    run_all.add_argument("--pc-config", default="config/windows_pc_check.example.json")
+    _add_control_program_args(run_all)
+    _add_ppmac_args(run_all)
+    _add_inspection_program_args(run_all)
+
     criteria_gate = subparsers.add_parser(
         "criteria-gate", help="기준(Criteria)의 Gate 상태를 한 단계 전진시킨다"
     )
@@ -263,6 +293,148 @@ def _print_result(result: CheckResult) -> None:
             f"  - {mismatch.field_path}: "
             f"baseline={mismatch.baseline_value} current={mismatch.current_value}"
         )
+
+
+def _run_all(args: argparse.Namespace) -> int:
+    """13개 항목을 순서대로 전부 실행하고, 마지막에 조치 대상 목록을 출력한다.
+
+    지정된 연동 옵션(--control-program-host, --ppmac-host,
+    --inspection-program-host, --use-wmi)에 따라 항목별로 실제 구현체 또는
+    Mock을 사용한다 (개별 서브커맨드와 동일한 규칙).
+    """
+    store = SQLiteResultStore(args.db)
+    control_connection = _control_program_connection(args)
+    ppmac_connection = _ppmac_connection(args)
+    inspection_connection = _inspection_program_connection(args)
+
+    results: list[CheckResult] = []
+
+    # A분류
+    pc_collector = (
+        WindowsPCStateCollector(create_wmi_client(), load_pc_check_config(args.pc_config))
+        if args.use_wmi
+        else MockPCStateCollector()
+    )
+    results.append(run_pc_check(pc_collector, store, args.equipment_id))
+
+    motion_hw_criteria = JSONCriteriaStore("motion_hw_check_criteria.json")
+    if args.seed_example_criteria:
+        seed_example_motion_criteria(motion_hw_criteria)
+    motion_hw_collector = (
+        PPMACMotionHWCollector(ppmac_connection, load_axis_variable_map(args.axis_map))
+        if ppmac_connection
+        else MockMotionHWCollector()
+    )
+    results.append(
+        run_motion_hw_check(motion_hw_collector, motion_hw_criteria, store, args.equipment_id)
+    )
+
+    optical_collector = (
+        TCPOpticalCommCollector(inspection_connection)
+        if inspection_connection
+        else MockOpticalCommCollector()
+    )
+    results.append(run_optical_comm_check(optical_collector, store, args.equipment_id))
+
+    # B분류
+    dangerous_ids = load_dangerous_io_ids(args.danger_list)
+    approved_ids = {
+        io_id.strip() for io_id in args.approve_dangerous.split(",") if io_id.strip()
+    }
+    io_client = (
+        TCPPLCTestModeClient(control_connection)
+        if control_connection
+        else MockPLCTestModeClient()
+    )
+    results.append(
+        run_io_check(
+            io_client, DEFAULT_IO_MAP, dangerous_ids, approved_ids, store, args.equipment_id
+        )
+    )
+
+    single_unit_runner = (
+        TCPSingleUnitSequenceRunner(control_connection)
+        if control_connection
+        else MockSingleUnitSequenceRunner()
+    )
+    results.append(
+        run_single_unit_check(
+            single_unit_runner, store, args.equipment_id, supervised=args.supervised
+        )
+    )
+
+    motion_tuning_criteria = JSONCriteriaStore("motion_tuning_check_criteria.json")
+    if args.seed_example_criteria:
+        seed_example_motion_tuning_criteria(motion_tuning_criteria)
+    motion_tuning_runner = (
+        PPMACMotionTuningRunner(ppmac_connection, load_move_specs(args.move_specs))
+        if ppmac_connection
+        else MockMotionTuningRunner()
+    )
+    results.append(
+        run_motion_tuning_check(
+            motion_tuning_runner, motion_tuning_criteria, store, args.equipment_id
+        )
+    )
+
+    interlock_criteria = JSONCriteriaStore("interlock_check_criteria.json")
+    if args.seed_example_criteria:
+        seed_example_interlock_criteria(interlock_criteria)
+    interlock_runner = (
+        TCPInterlockTestRunner(control_connection)
+        if control_connection
+        else MockInterlockTestRunner()
+    )
+    results.append(
+        run_interlock_check(
+            interlock_runner,
+            INTERLOCK_EXPECTED_SEQUENCE,
+            interlock_criteria,
+            store,
+            args.equipment_id,
+        )
+    )
+
+    # C분류 (기준 시료 1회 Scan 공유 파이프라인)
+    dof_store = JSONCriteriaStore("c_class_dof_criteria.json")
+    focus_store = JSONCriteriaStore("c_class_focus_criteria.json")
+    flatness_store = JSONCriteriaStore("c_class_flatness_criteria.json")
+    gantry_store = JSONCriteriaStore("c_class_gantry_criteria.json")
+    if args.seed_example_criteria:
+        seed_example_dof_criteria(dof_store)
+        seed_example_focus_criteria(focus_store)
+        seed_example_flatness_criteria(flatness_store)
+        seed_example_gantry_criteria(gantry_store)
+    scan_collector = (
+        TCPScanCollector(inspection_connection) if inspection_connection else MockScanCollector()
+    )
+    c_class_outcome = run_c_class_pipeline(
+        scan_collector,
+        dof_store,
+        focus_store,
+        flatness_store,
+        gantry_store,
+        store,
+        args.equipment_id,
+        max_scan_attempts=args.max_scan_attempts,
+    )
+
+    for result in results:
+        _print_result(result)
+    print(f"[C분류] {c_class_outcome.detail}")
+    for result in c_class_outcome.results:
+        _print_result(result)
+
+    print()
+    action_item_list = build_action_item_list(store, args.equipment_id)
+    if action_item_list:
+        print(f"{args.equipment_id} 조치 대상 목록 ({len(action_item_list)}건)")
+        for item in action_item_list:
+            print(f"  [{item.verdict.value}] {item.check_item}: {item.detail}")
+    else:
+        print(f"{args.equipment_id}: 조치 대상 없음 — 셋업 착수 가능")
+
+    return 1 if action_item_list or c_class_outcome.escalated else 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -397,6 +569,8 @@ def main(argv: list[str] | None = None) -> int:
             else MockMotionTuningRunner()
         )
         result = run_motion_tuning_check(runner, criteria_store, store, args.equipment_id)
+    elif args.command == "run-all":
+        return _run_all(args)
     elif args.command == "criteria-gate":
         criteria_store = JSONCriteriaStore(args.store)
         try:

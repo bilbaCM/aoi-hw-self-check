@@ -88,8 +88,16 @@ tests/                     # 항목당 최소 1개 테스트 파일, 전 항목 
 
 ## 실행 방법
 
+**Windows에서 한 번에 실행**: 저장소 루트의 `run.bat`을 더블클릭하면 설비 ID를
+물어본 뒤 13개 항목을 전부 실행하고 조치 대상 목록까지 보여줍니다 (Mock 모드).
+
+**명령줄에서 실행**:
+
 ```bash
-# 항목 하나 실행 (Mock)
+# 13개 항목 전부 실행 + 조치 대상 목록까지 한 번에
+python3 -m aoi_hw_check.cli run-all --equipment-id EQ01 --seed-example-criteria --supervised
+
+# 항목 하나만 실행 (Mock)
 python3 -m aoi_hw_check.cli pc-check --equipment-id EQ01
 python3 -m aoi_hw_check.cli io-check --equipment-id EQ01
 python3 -m aoi_hw_check.cli c-class-scan --equipment-id EQ01 --seed-example-criteria
