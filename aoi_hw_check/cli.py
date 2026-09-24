@@ -342,6 +342,8 @@ class RunAllOutcome:
     escalated: bool
     """C분류 재Scan 상한 초과로 작업자 개입이 필요한 상태인지."""
     report_path: Path
+    cancelled: bool = False
+    """should_continue 콜백이 False를 반환해 남은 항목을 실행하지 않고 멈췄는지."""
 
     @property
     def all_results(self) -> list[CheckResult]:
@@ -501,10 +503,22 @@ C_CLASS_SCAN_KEY = "c_class_scan"
 C_CLASS_SCAN_LABEL = "C분류 6항목 (Stage 평탄도·광학계·AFM·Gantry — 기준 시료 1회 Scan 공유)"
 
 
-def execute_selected(args: argparse.Namespace, selected_keys: set[str]) -> RunAllOutcome:
+def execute_selected(
+    args: argparse.Namespace,
+    selected_keys: set[str],
+    on_progress: Callable[[str, str], None] | None = None,
+    should_continue: Callable[[], bool] | None = None,
+) -> RunAllOutcome:
     """CHECK_ITEM_SPECS의 key(+ 필요하면 C_CLASS_SCAN_KEY)로 지정한 항목만 실행하고
     리포트 파일까지 저장한다 (화면 출력은 하지 않음). 지정된 연동 옵션에 따라
     항목별로 실제 구현체 또는 Mock을 쓰는 규칙은 execute_run_all과 동일하다.
+
+    on_progress(key, label)는 항목(또는 C분류 그룹) 하나가 끝날 때마다 호출된다
+    — 오래 걸릴 수 있는 실기 연동 실행 중 GUI가 진행 상황을 보여주는 데 쓴다.
+    should_continue()는 각 항목을 시작하기 "전"에 확인하며, False를 반환하면
+    그 항목부터 실행하지 않고 멈춘다(이미 시작한 항목은 끝까지 실행 — 실기
+    명령을 중간에 끊는 것은 더 위험할 수 있어서다). 이때 결과의 cancelled가
+    True가 된다. 둘 다 생략하면 기존과 동일하게 전부 조용히 실행한다.
 
     조치 대상 목록은 이번에 실행한 항목만이 아니라 설비의 항목별 "가장 최근"
     결과를 기준으로 한다(build_action_item_list와 동일한 원칙) — 이번 실행에서
@@ -512,20 +526,32 @@ def execute_selected(args: argparse.Namespace, selected_keys: set[str]) -> RunAl
     """
     ctx = _build_run_context(args)
 
-    results = [
-        execute_fn(args, ctx)
-        for key, _label, execute_fn in CHECK_ITEM_SPECS
-        if key in selected_keys
-    ]
+    results: list[CheckResult] = []
+    cancelled = False
+    for key, label, execute_fn in CHECK_ITEM_SPECS:
+        if key not in selected_keys:
+            continue
+        if should_continue is not None and not should_continue():
+            cancelled = True
+            break
+        result = execute_fn(args, ctx)
+        results.append(result)
+        if on_progress is not None:
+            on_progress(key, label)
 
     c_class_detail = ""
     c_class_results: list[CheckResult] = []
     escalated = False
-    if C_CLASS_SCAN_KEY in selected_keys:
-        c_class_outcome = execute_c_class_scan(args, ctx)
-        c_class_detail = c_class_outcome.detail
-        c_class_results = c_class_outcome.results
-        escalated = c_class_outcome.escalated
+    if not cancelled and C_CLASS_SCAN_KEY in selected_keys:
+        if should_continue is not None and not should_continue():
+            cancelled = True
+        else:
+            c_class_outcome = execute_c_class_scan(args, ctx)
+            c_class_detail = c_class_outcome.detail
+            c_class_results = c_class_outcome.results
+            escalated = c_class_outcome.escalated
+            if on_progress is not None:
+                on_progress(C_CLASS_SCAN_KEY, C_CLASS_SCAN_LABEL)
 
     action_item_list = build_action_item_list(ctx.store, args.equipment_id)
     report_path = save_run_report(
@@ -539,6 +565,7 @@ def execute_selected(args: argparse.Namespace, selected_keys: set[str]) -> RunAl
         action_items=action_item_list,
         escalated=escalated,
         report_path=report_path,
+        cancelled=cancelled,
     )
 
 

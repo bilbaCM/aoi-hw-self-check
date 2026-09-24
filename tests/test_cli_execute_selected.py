@@ -96,6 +96,65 @@ class ExecuteSelectedTest(unittest.TestCase):
         self.assertEqual(len(outcome.c_class_results), 6)
         self.assertEqual(len(outcome.all_results), 13)
 
+    def test_on_progress_fires_once_per_selected_item_in_order(self) -> None:
+        seen: list[tuple[str, str]] = []
+
+        outcome = execute_selected(
+            _run_all_args(),
+            {"pc_check", "motion_hw_check", C_CLASS_SCAN_KEY},
+            on_progress=lambda key, label: seen.append((key, label)),
+        )
+
+        self.assertEqual(
+            seen,
+            [
+                ("pc_check", "PC 동작 Check"),
+                ("motion_hw_check", "모션 H/W Check"),
+                (C_CLASS_SCAN_KEY, "C분류 6항목 (Stage 평탄도·광학계·AFM·Gantry — 기준 시료 1회 Scan 공유)"),
+            ],
+        )
+        self.assertFalse(outcome.cancelled)
+
+    def test_should_continue_false_before_an_item_stops_remaining_items(self) -> None:
+        seen: list[str] = []
+
+        def should_continue() -> bool:
+            return len(seen) < 1  # 2번째 항목을 시작하기 전에 중단
+
+        outcome = execute_selected(
+            _run_all_args(),
+            {"pc_check", "motion_hw_check", C_CLASS_SCAN_KEY},
+            on_progress=lambda key, _label: seen.append(key),
+            should_continue=should_continue,
+        )
+
+        self.assertEqual(seen, ["pc_check"])
+        self.assertEqual(len(outcome.results), 1)
+        self.assertEqual(outcome.c_class_results, [])
+        self.assertTrue(outcome.cancelled)
+
+    def test_should_continue_false_before_c_class_skips_only_c_class(self) -> None:
+        def should_continue() -> bool:
+            return False
+
+        outcome = execute_selected(
+            _run_all_args(),
+            {C_CLASS_SCAN_KEY},
+            should_continue=should_continue,
+        )
+
+        self.assertEqual(outcome.results, [])
+        self.assertEqual(outcome.c_class_results, [])
+        self.assertTrue(outcome.cancelled)
+
+    def test_an_already_started_item_always_finishes_even_if_cancelled_after(self) -> None:
+        # should_continue는 각 항목을 "시작하기 전"에만 확인한다 — 이미 시작한
+        # 항목(여기서는 pc_check 자체)은 중간에 끊기지 않고 끝까지 실행된다.
+        outcome = execute_selected(_run_all_args(), {"pc_check"}, should_continue=lambda: True)
+
+        self.assertEqual(len(outcome.results), 1)
+        self.assertFalse(outcome.cancelled)
+
 
 if __name__ == "__main__":
     unittest.main()

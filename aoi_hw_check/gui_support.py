@@ -8,8 +8,12 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Iterable
 from dataclasses import dataclass
 
+from aoi_hw_check.checks.io_check.client import DEFAULT_IO_MAP
+from aoi_hw_check.checks.io_check.danger_list import load_dangerous_io_ids
+from aoi_hw_check.checks.io_check.models import IOPoint
 from aoi_hw_check.cli import (
     C_CLASS_SCAN_KEY,
     C_CLASS_SCAN_LABEL,
@@ -43,6 +47,7 @@ def build_run_all_args(
     inspection_program_host: str | None = None,
     inspection_program_port: int | None = None,
     use_wmi: bool = False,
+    approve_dangerous: str = "",
 ) -> argparse.Namespace:
     """GUI에서 사용할 run-all 인자를 만든다 (전체 실행/선택 실행 공용).
 
@@ -58,6 +63,9 @@ def build_run_all_args(
     이전과 동일하게 전부 Mock이다. 입력값(숫자 여부, host/port 짝) 검증은
     `build_connected_run_all_args`가 미리 한다 — 이 함수는 이미 검증된 값을
     받는다고 가정한다.
+
+    approve_dangerous는 CLI의 --approve-dangerous와 동일하게 콤마로 구분한
+    io_id 목록 — 작업자가 확인·승인한 위험 출력만 I/O Check가 시험한다.
     """
     argv = [
         "run-all",
@@ -84,6 +92,8 @@ def build_run_all_args(
         ]
     if use_wmi:
         argv.append("--use-wmi")
+    if approve_dangerous:
+        argv += ["--approve-dangerous", approve_dangerous]
     return build_parser().parse_args(argv)
 
 
@@ -114,10 +124,17 @@ def _parse_port(text: str, label: str) -> int:
     return port
 
 
-def build_connected_run_all_args(equipment_id: str, inputs: ConnectionInputs) -> argparse.Namespace:
+def build_connected_run_all_args(
+    equipment_id: str,
+    inputs: ConnectionInputs,
+    approved_dangerous_io_ids: Iterable[str] = (),
+) -> argparse.Namespace:
     """연동 설정 창의 입력값으로 run-all 인자를 만든다. 호스트를 비워둔 항목은
     Mock으로 남는다. 호스트는 입력했는데 포트가 비었거나 숫자가 아니면
     ValueError를 낸다(메시지를 그대로 사용자에게 보여줄 수 있다).
+
+    approved_dangerous_io_ids는 작업자가 화면에서 체크해 승인한 위험 출력
+    io_id들 — 승인하지 않은 위험 출력은 계속 NA로 남는다(안전 기본값).
     """
     kwargs: dict[str, object] = {"use_wmi": inputs.use_wmi}
 
@@ -132,6 +149,10 @@ def build_connected_run_all_args(equipment_id: str, inputs: ConnectionInputs) ->
     if inputs.inspection_program_host.strip():
         kwargs["inspection_program_host"] = inputs.inspection_program_host.strip()
         kwargs["inspection_program_port"] = _parse_port(inputs.inspection_program_port, "검사 프로그램")
+
+    approved = sorted({io_id.strip() for io_id in approved_dangerous_io_ids if io_id.strip()})
+    if approved:
+        kwargs["approve_dangerous"] = ",".join(approved)
 
     return build_run_all_args(equipment_id, **kwargs)
 
@@ -223,3 +244,22 @@ def save_criteria_value(
     처음부터 다시 검증을 거쳐야 한다 — 여기서도 그 원칙을 그대로 따른다.
     """
     return JSONCriteriaStore(store_path).save_criteria(check_item, key, min_value, max_value)
+
+
+# run-all의 --danger-list 기본값과 동일 — I/O Check가 실제로 읽는 파일이다.
+DANGER_LIST_PATH = "config/io_check_danger_list.example.json"
+
+
+def list_dangerous_io_points() -> list[IOPoint]:
+    """위험 출력 목록(DANGER_LIST_PATH)에 있는 I/O를, 설명이 있으면 함께 반환한다.
+
+    io_check가 실제로 쓰는 I/O Map은 지금 DEFAULT_IO_MAP 하나뿐이라(실제 I/O
+    Map 설정 파일은 아직 없음 — TBD) 여기서 설명을 찾아온다. 파일이 없거나
+    비어 있으면 빈 리스트.
+    """
+    dangerous_ids = load_dangerous_io_ids(DANGER_LIST_PATH)
+    by_id = {point.io_id: point for point in DEFAULT_IO_MAP}
+    return [
+        by_id.get(io_id, IOPoint(io_id, None, None, ""))
+        for io_id in sorted(dangerous_ids)
+    ]

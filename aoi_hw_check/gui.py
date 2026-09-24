@@ -33,6 +33,7 @@ from aoi_hw_check.gui_support import (
     format_criteria_row,
     format_detail_cell,
     list_criteria_rows,
+    list_dangerous_io_points,
     next_status,
     parse_min_max,
     save_criteria_value,
@@ -50,6 +51,7 @@ class HWSelfCheckApp(tk.Tk):
 
         self._result_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self._connection_inputs = ConnectionInputs()
+        self._cancel_event = threading.Event()
         self._build_widgets()
 
     def _build_widgets(self) -> None:
@@ -64,6 +66,11 @@ class HWSelfCheckApp(tk.Tk):
 
         self._run_button = ttk.Button(top, text="선택 항목 실행", command=self._on_run_clicked)
         self._run_button.pack(side="left")
+
+        self._cancel_button = ttk.Button(
+            top, text="취소", command=self._on_cancel_clicked, state="disabled"
+        )
+        self._cancel_button.pack(side="left", padx=(6, 0))
 
         self._status_var = tk.StringVar(value="대기 중")
         ttk.Label(top, textvariable=self._status_var).pack(side="left", padx=12)
@@ -84,11 +91,17 @@ class HWSelfCheckApp(tk.Tk):
             anchor="w"
         )
 
+        self._progress = ttk.Progressbar(self, mode="determinate")
+        self._progress.pack(fill="x", padx=10, pady=(0, 6))
+
         body = ttk.Frame(self)
         body.pack(fill="both", expand=True, padx=10, pady=(0, 10))
 
-        selection_frame = ttk.LabelFrame(body, text="실행할 항목", padding=8)
-        selection_frame.pack(side="left", fill="y", padx=(0, 10))
+        sidebar = ttk.Frame(body)
+        sidebar.pack(side="left", fill="y", padx=(0, 10))
+
+        selection_frame = ttk.LabelFrame(sidebar, text="실행할 항목", padding=8)
+        selection_frame.pack(fill="x")
 
         # ttk::checkbutton은 생성자에 wraplength를 직접 받지 않으므로 스타일로 설정한다
         # (C분류 항목처럼 긴 이름이 사이드바 폭을 넘지 않도록 줄바꿈).
@@ -111,6 +124,31 @@ class HWSelfCheckApp(tk.Tk):
             ttk.Checkbutton(
                 selection_frame, text=label, variable=var, style="Selectable.TCheckbutton"
             ).pack(anchor="w", pady=1)
+
+        danger_frame = ttk.LabelFrame(sidebar, text="위험 I/O 승인 (I/O Check)", padding=8)
+        danger_frame.pack(fill="x", pady=(10, 0))
+
+        self._danger_points = list_dangerous_io_points()
+        self._danger_vars: dict[str, tk.BooleanVar] = {}
+        if self._danger_points:
+            ttk.Label(
+                danger_frame,
+                text="체크한 항목만 승인되어 실제로 구동됩니다.\n체크하지 않으면 계속 NA로 남습니다.",
+                foreground="#555555",
+                justify="left",
+                wraplength=240,
+            ).pack(anchor="w", pady=(0, 4))
+            for point in self._danger_points:
+                var = tk.BooleanVar(value=False)  # 안전 기본값: 승인 안 함
+                self._danger_vars[point.io_id] = var
+                label = f"{point.io_id} — {point.description}" if point.description else point.io_id
+                ttk.Checkbutton(
+                    danger_frame, text=label, variable=var, style="Selectable.TCheckbutton"
+                ).pack(anchor="w", pady=1)
+        else:
+            ttk.Label(danger_frame, text="등록된 위험 출력 없음", foreground="#555555").pack(
+                anchor="w"
+            )
 
         content = ttk.Frame(body)
         content.pack(side="left", fill="both", expand=True)
@@ -143,6 +181,9 @@ class HWSelfCheckApp(tk.Tk):
     def _selected_item_keys(self) -> set[str]:
         return {key for key, var in self._item_vars.items() if var.get()}
 
+    def _approved_dangerous_ids(self) -> set[str]:
+        return {io_id for io_id, var in self._danger_vars.items() if var.get()}
+
     def _on_run_clicked(self) -> None:
         equipment_id = self._equipment_id_var.get().strip()
         if not equipment_id:
@@ -154,18 +195,30 @@ class HWSelfCheckApp(tk.Tk):
             messagebox.showwarning(PROGRAM_NAME, "실행할 항목을 하나 이상 선택하세요.")
             return
 
+        approved_ids = self._approved_dangerous_ids()
+        if approved_ids and not messagebox.askyesno(
+            PROGRAM_NAME,
+            f"위험 출력 {len(approved_ids)}건을 승인하고 실제로 구동합니다:\n"
+            + ", ".join(sorted(approved_ids))
+            + "\n\n계속하시겠습니까?",
+        ):
+            return
+
         # 연동 설정(호스트/포트) 검증은 메인 스레드에서 미리 해서, 잘못된 입력이면
         # 스레드를 띄우지도 않고 바로 알려준다 — "연동 설정..." 창에서 저장할 때도
         # 같은 검증을 거치므로 보통은 여기서 실패하지 않는다.
         try:
-            args = build_connected_run_all_args(equipment_id, self._connection_inputs)
+            args = build_connected_run_all_args(equipment_id, self._connection_inputs, approved_ids)
         except ValueError as exc:
             messagebox.showwarning(PROGRAM_NAME, str(exc))
             return
 
+        self._cancel_event.clear()
         self._run_button.state(["disabled"])
+        self._cancel_button.state(["!disabled"])
+        self._progress.configure(maximum=max(len(selected_keys), 1), value=0)
         self._status_var.set(
-            f"실행 중 ({len(selected_keys)}개 항목, "
+            f"실행 중 (0/{len(selected_keys)}개 항목, "
             f"{describe_connection_inputs(self._connection_inputs)})..."
         )
         self._tree.delete(*self._tree.get_children())
@@ -173,15 +226,33 @@ class HWSelfCheckApp(tk.Tk):
         self._report_var.set("")
 
         thread = threading.Thread(
-            target=self._run_in_background, args=(equipment_id, args, selected_keys), daemon=True
+            target=self._run_in_background,
+            args=(equipment_id, args, selected_keys, len(selected_keys)),
+            daemon=True,
         )
         thread.start()
         self.after(100, self._poll_result_queue)
 
-    def _run_in_background(self, equipment_id: str, args, selected_keys: set[str]) -> None:
-        # UI 스레드를 막지 않도록 별도 스레드에서 실행하고, 결과/예외는 큐로 전달한다.
+    def _on_cancel_clicked(self) -> None:
+        self._cancel_event.set()
+        self._cancel_button.state(["disabled"])
+        self._status_var.set("취소 요청됨 — 현재 실행 중인 항목을 마치고 중단합니다...")
+
+    def _run_in_background(
+        self, equipment_id: str, args, selected_keys: set[str], total: int
+    ) -> None:
+        # UI 스레드를 막지 않도록 별도 스레드에서 실행한다. Tkinter 위젯은 이
+        # 스레드에서 직접 건드리지 않고, 큐로 메시지만 전달한다(스레드 안전).
+        def on_progress(_key: str, label: str) -> None:
+            self._result_queue.put(("progress", (label, total)))
+
+        def should_continue() -> bool:
+            return not self._cancel_event.is_set()
+
         try:
-            outcome = execute_selected(args, selected_keys)
+            outcome = execute_selected(
+                args, selected_keys, on_progress=on_progress, should_continue=should_continue
+            )
         except Exception as exc:  # noqa: BLE001 - GUI 스레드로 예외 메시지를 전달하기 위함
             self._result_queue.put(("error", exc))
             return
@@ -194,7 +265,16 @@ class HWSelfCheckApp(tk.Tk):
             self.after(100, self._poll_result_queue)
             return
 
+        if kind == "progress":
+            label, total = payload
+            self._progress.configure(value=self._progress["value"] + 1)
+            done = int(self._progress["value"])
+            self._status_var.set(f"실행 중 ({done}/{total}개 항목)... 방금 완료: {label}")
+            self.after(100, self._poll_result_queue)
+            return
+
         self._run_button.state(["!disabled"])
+        self._cancel_button.state(["disabled"])
         if kind == "error":
             self._status_var.set("오류 발생")
             messagebox.showerror(PROGRAM_NAME, f"실행 중 오류가 발생했습니다:\n{payload}")
@@ -214,9 +294,12 @@ class HWSelfCheckApp(tk.Tk):
 
         self._set_action_text(format_action_items(equipment_id, outcome.action_items))
 
-        status = "완료 (" + datetime.now().strftime("%H:%M:%S") + ")"
-        if outcome.escalated:
-            status += " — C분류 재Scan 상한 초과, 작업자 개입 필요"
+        if outcome.cancelled:
+            status = f"취소됨 ({len(outcome.all_results)}개 항목까지 실행)"
+        else:
+            status = "완료 (" + datetime.now().strftime("%H:%M:%S") + ")"
+            if outcome.escalated:
+                status += " — C분류 재Scan 상한 초과, 작업자 개입 필요"
         self._status_var.set(status)
         self._report_var.set(f"결과 저장 위치: {outcome.report_path}")
 

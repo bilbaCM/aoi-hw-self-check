@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import time
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,6 +11,7 @@ from aoi_hw_check.cli import C_CLASS_SCAN_KEY, CRITERIA_STORE_FILES
 from aoi_hw_check.core.models import CheckResult, FieldMismatch, GateStatus, Verdict
 from aoi_hw_check.core.thresholds import Criteria, JSONCriteriaStore
 from aoi_hw_check.gui_support import (
+    DANGER_LIST_PATH,
     SELECTABLE_ITEMS,
     ConnectionInputs,
     advance_criteria_gate,
@@ -20,6 +22,7 @@ from aoi_hw_check.gui_support import (
     format_criteria_row,
     format_detail_cell,
     list_criteria_rows,
+    list_dangerous_io_points,
     parse_min_max,
     save_criteria_value,
 )
@@ -75,6 +78,16 @@ class BuildRunAllArgsTest(unittest.TestCase):
 
         self.assertTrue(args.use_wmi)
 
+    def test_approve_dangerous_defaults_to_empty(self) -> None:
+        args = build_run_all_args("EQ01")
+
+        self.assertEqual(args.approve_dangerous, "")
+
+    def test_approve_dangerous_passes_through(self) -> None:
+        args = build_run_all_args("EQ01", approve_dangerous="high_voltage_output_1,other_id")
+
+        self.assertEqual(args.approve_dangerous, "high_voltage_output_1,other_id")
+
 
 class BuildConnectedRunAllArgsTest(unittest.TestCase):
     def test_all_blank_inputs_produce_all_mock_args(self) -> None:
@@ -125,6 +138,25 @@ class BuildConnectedRunAllArgsTest(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             build_connected_run_all_args("EQ01", inputs)
+
+    def test_no_approved_ids_means_no_approve_dangerous_flag(self) -> None:
+        args = build_connected_run_all_args("EQ01", ConnectionInputs())
+
+        self.assertEqual(args.approve_dangerous, "")
+
+    def test_approved_ids_are_joined_and_sorted(self) -> None:
+        args = build_connected_run_all_args(
+            "EQ01", ConnectionInputs(), approved_dangerous_io_ids=["b_id", "a_id"]
+        )
+
+        self.assertEqual(args.approve_dangerous, "a_id,b_id")
+
+    def test_blank_approved_ids_are_ignored(self) -> None:
+        args = build_connected_run_all_args(
+            "EQ01", ConnectionInputs(), approved_dangerous_io_ids=["  ", "real_id"]
+        )
+
+        self.assertEqual(args.approve_dangerous, "real_id")
 
 
 class DescribeConnectionInputsTest(unittest.TestCase):
@@ -258,6 +290,45 @@ class GateManagementFileIOTest(unittest.TestCase):
         self.assertEqual(reloaded.gate_status, GateStatus.GENERATED)
 
 
+class ListDangerousIoPointsTest(unittest.TestCase):
+    """list_dangerous_io_points는 DANGER_LIST_PATH를 현재 작업 디렉터리 기준
+    상대경로로 읽으므로 임시 디렉터리로 옮겨서 테스트한다."""
+
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self._old_cwd = os.getcwd()
+        os.chdir(self._tmpdir.name)
+
+    def tearDown(self) -> None:
+        os.chdir(self._old_cwd)
+        self._tmpdir.cleanup()
+
+    def test_empty_when_danger_list_file_is_missing(self) -> None:
+        self.assertEqual(list_dangerous_io_points(), [])
+
+    def test_lists_ids_from_the_danger_list_with_known_description(self) -> None:
+        os.makedirs(os.path.dirname(DANGER_LIST_PATH), exist_ok=True)
+        with open(DANGER_LIST_PATH, "w", encoding="utf-8") as f:
+            f.write('["high_voltage_output_1"]')
+
+        points = list_dangerous_io_points()
+
+        self.assertEqual(len(points), 1)
+        self.assertEqual(points[0].io_id, "high_voltage_output_1")
+        self.assertIn("위험 출력", points[0].description)
+
+    def test_unknown_id_still_listed_with_blank_description(self) -> None:
+        os.makedirs(os.path.dirname(DANGER_LIST_PATH), exist_ok=True)
+        with open(DANGER_LIST_PATH, "w", encoding="utf-8") as f:
+            f.write('["some_new_output_not_in_default_map"]')
+
+        points = list_dangerous_io_points()
+
+        self.assertEqual(len(points), 1)
+        self.assertEqual(points[0].io_id, "some_new_output_not_in_default_map")
+        self.assertEqual(points[0].description, "")
+
+
 class ParseMinMaxTest(unittest.TestCase):
     def test_parses_valid_numbers(self) -> None:
         self.assertEqual(parse_min_max("90000", "110000"), (90000.0, 110000.0))
@@ -365,6 +436,49 @@ class HWSelfCheckAppRenderTest(unittest.TestCase):
 
         self.assertEqual(self.app._connection_inputs, inputs)
         self.assertIn("PPMAC", self.app._connection_summary_var.get())
+
+    def test_dangerous_io_checkboxes_default_unapproved(self) -> None:
+        # 이 테스트는 chdir 없이 저장소 루트에서 실행되므로 실제
+        # config/io_check_danger_list.example.json(high_voltage_output_1)을 읽는다.
+        self.assertIn("high_voltage_output_1", self.app._danger_vars)
+        self.assertEqual(self.app._approved_dangerous_ids(), set())
+
+    def test_checking_a_danger_checkbox_approves_it(self) -> None:
+        self.app._danger_vars["high_voltage_output_1"].set(True)
+
+        self.assertEqual(self.app._approved_dangerous_ids(), {"high_voltage_output_1"})
+
+    def test_render_outcome_shows_cancelled_status(self) -> None:
+        from aoi_hw_check.cli import RunAllOutcome
+
+        passing = CheckResult(
+            equipment_id="EQ01", check_item="PC 동작 Check", verdict=Verdict.PASS, detail="정상"
+        )
+        outcome = RunAllOutcome(
+            results=[passing],
+            c_class_detail="",
+            c_class_results=[],
+            action_items=[],
+            escalated=False,
+            report_path=Path("reports/EQ01_20260101_000000.log"),
+            cancelled=True,
+        )
+
+        self.app._render_outcome("EQ01", outcome)
+
+        self.assertIn("취소됨", self.app._status_var.get())
+
+    def test_run_with_approved_danger_ids_asks_for_confirmation(self) -> None:
+        from unittest import mock
+
+        self.app._danger_vars["high_voltage_output_1"].set(True)
+
+        with mock.patch("aoi_hw_check.gui.messagebox.askyesno", return_value=False) as mock_ask:
+            self.app._on_run_clicked()
+
+        mock_ask.assert_called_once()
+        # 확인 대화상자에서 "아니오"를 선택했으니 실행 버튼은 그대로 활성 상태여야 한다
+        self.assertNotIn("disabled", self.app._run_button.state())
 
 
 @unittest.skipUnless(_TK_APP_AVAILABLE, "tkinter 또는 디스플레이를 사용할 수 없는 환경")
@@ -480,6 +594,64 @@ class HWSelfCheckAppIntegrationTest(unittest.TestCase):
         rows = self.app._tree.get_children()
         self.assertEqual(len(rows), 1)
         self.assertEqual(self.app._tree.item(rows[0], "values")[1], "PC 동작 Check")
+
+    def _run_via_button_and_wait(self, timeout_sec: float = 30.0) -> None:
+        # Mock 실행 자체는 보통 1초 안에 끝나지만, 공유 샌드박스에서 다른
+        # 프로세스와 자원을 다툴 때는 스레드 스케줄링이 밀려 훨씬 오래 걸릴 수
+        # 있어(직접 측정: 정상 시 <1초, 부하 시 10초 넘게 걸리는 경우 관찰)
+        # 넉넉하게 잡는다 — 실제 동작이 아니라 폴링 루프의 여유 시간 문제다.
+        self.app._on_run_clicked()
+        deadline = time.time() + timeout_sec
+        while time.time() < deadline:
+            self.app.update()
+            if self.app._tree.get_children() or self.app._status_var.get() == "오류 발생":
+                return
+            time.sleep(0.02)
+        self.fail("실행이 제한 시간 내에 끝나지 않았습니다")
+
+    def test_running_via_button_click_skips_confirmation_without_approved_danger_ids(self) -> None:
+        from unittest import mock
+
+        # 이 테스트의 목적은 승인된 위험 출력이 없을 때 확인 대화상자가 뜨지
+        # 않는지 확인하는 것뿐이라, 굳이 13개 항목을 전부 돌릴 필요는 없다 —
+        # 항목 1개로 좁혀서 빠르고 안정적으로 검증한다.
+        self.app._set_all_items(False)
+        self.app._item_vars["pc_check"].set(True)
+
+        with mock.patch("aoi_hw_check.gui.messagebox.askyesno") as mock_ask:
+            self._run_via_button_and_wait()
+
+        mock_ask.assert_not_called()
+
+    def test_running_via_button_click_advances_progress_to_completion(self) -> None:
+        self.app._set_all_items(False)
+        self.app._item_vars["pc_check"].set(True)
+        self.app._item_vars["motion_hw_check"].set(True)
+
+        self._run_via_button_and_wait()
+
+        self.assertEqual(len(self.app._tree.get_children()), 2)
+        self.assertEqual(int(self.app._progress["value"]), 2)
+        self.assertEqual(int(self.app._progress["maximum"]), 2)
+        self.assertIn("완료", self.app._status_var.get())
+        self.assertIn("disabled", self.app._cancel_button.state())
+
+    def test_approving_a_danger_id_via_button_runs_it_after_confirmation(self) -> None:
+        from unittest import mock
+
+        self.app._set_all_items(False)
+        self.app._item_vars["io_check"].set(True)
+        self.app._danger_vars["high_voltage_output_1"].set(True)
+
+        with mock.patch("aoi_hw_check.gui.messagebox.askyesno", return_value=True):
+            self._run_via_button_and_wait()
+
+        rows = self.app._tree.get_children()
+        self.assertEqual(len(rows), 1)
+        values = self.app._tree.item(rows[0], "values")
+        self.assertEqual(values[1], "I/O Check")
+        # 위험 출력을 승인했으니 더 이상 "작업자 확인 대기"로 NA 처리되지 않아야 한다
+        self.assertNotIn("작업자 확인 대기", values[2])
 
 
 @unittest.skipUnless(_TK_APP_AVAILABLE, "tkinter 또는 디스플레이를 사용할 수 없는 환경")
