@@ -111,7 +111,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     c_class_scan = subparsers.add_parser(
         "c-class-scan",
-        help="C분류 5항목 실행 (기준 시료 1회 Scan을 공유하는 AF Z맵/스캔영상 파이프라인)",
+        help="C분류 6항목 실행 (기준 시료 1회 Scan을 공유하는 AF Z맵/스캔영상 파이프라인)",
     )
     c_class_scan.add_argument("--equipment-id", required=True)
     c_class_scan.add_argument("--db", default="aoi_hw_check.sqlite3")

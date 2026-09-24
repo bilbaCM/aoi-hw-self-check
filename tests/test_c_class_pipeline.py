@@ -40,10 +40,10 @@ class CClassPipelineTest(unittest.TestCase):
             max_scan_attempts=max_scan_attempts,
         )
 
-    def test_single_scan_produces_five_results(self) -> None:
+    def test_single_scan_produces_six_results(self) -> None:
         outcome = self._run()
 
-        self.assertEqual(len(outcome.results), 5)
+        self.assertEqual(len(outcome.results), 6)
         self.assertFalse(outcome.escalated)
 
     def test_without_any_criteria_focus_baseline_saves_and_rest_are_na(self) -> None:

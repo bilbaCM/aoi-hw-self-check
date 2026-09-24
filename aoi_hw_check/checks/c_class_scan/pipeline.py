@@ -5,8 +5,7 @@ from dataclasses import dataclass
 from aoi_hw_check.checks.afm_setting_check.judge import run_afm_setting_check
 from aoi_hw_check.checks.c_class_scan.collector import ScanCollector
 from aoi_hw_check.checks.gantry_squareness_check.judge import run_gantry_squareness_check
-from aoi_hw_check.checks.optical_focus_check.judge import run_optical_focus_check
-from aoi_hw_check.checks.optical_tilt_check.judge import run_optical_tilt_check
+from aoi_hw_check.checks.optical_subsystem_check.judge import run_optical_subsystem_check
 from aoi_hw_check.checks.pin_pad_flatness_check.judge import run_pin_pad_flatness_check
 from aoi_hw_check.core.models import CheckResult, Verdict
 from aoi_hw_check.core.storage import ResultStore
@@ -33,7 +32,7 @@ def run_c_class_pipeline(
     equipment_id: str,
     max_scan_attempts: int = DEFAULT_MAX_SCAN_ATTEMPTS,
 ) -> CClassPipelineOutcome:
-    """기준 시료 1회 Scan으로 C분류 5개 항목을 함께 판정한다.
+    """기준 시료 1회 Scan으로 C분류 6개 항목을 함께 판정한다.
 
     영상은 설비를 구동해야만 취득되고(Scan 1회 = 셋업 시간) 단독 취득이
     불가능하므로, 재Scan 횟수에 상한을 두어 NG 몇 건으로 셋업 시간이
@@ -54,11 +53,24 @@ def run_c_class_pipeline(
 
     scan_result = collector.run_reference_scan()
 
+    subsystems = sorted(
+        set(scan_result.af_z_map.tracks) | set(scan_result.scan_images.focus_measures)
+    )
+
     results = [
         run_pin_pad_flatness_check(scan_result, flatness_criteria_store, store, equipment_id),
-        run_optical_tilt_check(scan_result, dof_criteria_store, store, equipment_id),
+        *(
+            run_optical_subsystem_check(
+                subsystem,
+                scan_result,
+                dof_criteria_store,
+                focus_criteria_store,
+                store,
+                equipment_id,
+            )
+            for subsystem in subsystems
+        ),
         run_afm_setting_check(scan_result, dof_criteria_store, store, equipment_id),
-        run_optical_focus_check(scan_result, focus_criteria_store, store, equipment_id),
         run_gantry_squareness_check(scan_result, gantry_criteria_store, store, equipment_id),
     ]
 

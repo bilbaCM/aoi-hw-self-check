@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from aoi_hw_check.checks.c_class_scan.constants import DOF_CHECK_ITEM
 from aoi_hw_check.checks.gantry_squareness_check.judge import CHECK_ITEM as GANTRY_CHECK_ITEM
-from aoi_hw_check.checks.optical_focus_check.judge import CHECK_ITEM as FOCUS_CHECK_ITEM
+from aoi_hw_check.checks.optical_subsystem_check.judge import check_item_name
 from aoi_hw_check.checks.pin_pad_flatness_check.judge import (
     CHECK_ITEM as FLATNESS_CHECK_ITEM,
 )
@@ -33,7 +33,7 @@ def seed_example_dof_criteria(criteria_store: CriteriaStore) -> None:
 
 def seed_example_focus_criteria(criteria_store: CriteriaStore) -> None:
     for subsystem, (lo, hi) in _EXAMPLE_FOCUS_RATIO_RANGE.items():
-        criteria_store.save_criteria(FOCUS_CHECK_ITEM, subsystem, lo, hi)
+        criteria_store.save_criteria(check_item_name(subsystem), "focus_ratio", lo, hi)
 
 
 def seed_example_flatness_criteria(criteria_store: CriteriaStore) -> None:
