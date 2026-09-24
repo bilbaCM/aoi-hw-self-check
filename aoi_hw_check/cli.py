@@ -2,6 +2,14 @@ from __future__ import annotations
 
 import argparse
 
+from aoi_hw_check.checks.c_class_scan.collector import MockScanCollector
+from aoi_hw_check.checks.c_class_scan.example_criteria import (
+    seed_example_dof_criteria,
+    seed_example_flatness_criteria,
+    seed_example_focus_criteria,
+    seed_example_gantry_criteria,
+)
+from aoi_hw_check.checks.c_class_scan.pipeline import run_c_class_pipeline
 from aoi_hw_check.checks.interlock_check.example_criteria import (
     seed_example_criteria as seed_example_interlock_criteria,
 )
@@ -101,6 +109,23 @@ def build_parser() -> argparse.ArgumentParser:
     action_items.add_argument("--equipment-id", required=True)
     action_items.add_argument("--db", default="aoi_hw_check.sqlite3")
 
+    c_class_scan = subparsers.add_parser(
+        "c-class-scan",
+        help="C분류 5항목 실행 (기준 시료 1회 Scan을 공유하는 AF Z맵/스캔영상 파이프라인)",
+    )
+    c_class_scan.add_argument("--equipment-id", required=True)
+    c_class_scan.add_argument("--db", default="aoi_hw_check.sqlite3")
+    c_class_scan.add_argument("--dof-criteria", default="c_class_dof_criteria.json")
+    c_class_scan.add_argument("--focus-criteria", default="c_class_focus_criteria.json")
+    c_class_scan.add_argument("--flatness-criteria", default="c_class_flatness_criteria.json")
+    c_class_scan.add_argument("--gantry-criteria", default="c_class_gantry_criteria.json")
+    c_class_scan.add_argument(
+        "--seed-example-criteria",
+        action="store_true",
+        help="개발/테스트용 예시 기준(DOF/초점비율/평탄도/직각도)을 등록한 뒤 실행",
+    )
+    c_class_scan.add_argument("--max-scan-attempts", type=int, default=3)
+
     return parser
 
 
@@ -177,6 +202,33 @@ def main(argv: list[str] | None = None) -> int:
         for item in items:
             print(f"  [{item.verdict.value}] {item.check_item}: {item.detail}")
         return 1
+    elif args.command == "c-class-scan":
+        store = SQLiteResultStore(args.db)
+        dof_store = JSONCriteriaStore(args.dof_criteria)
+        focus_store = JSONCriteriaStore(args.focus_criteria)
+        flatness_store = JSONCriteriaStore(args.flatness_criteria)
+        gantry_store = JSONCriteriaStore(args.gantry_criteria)
+        if args.seed_example_criteria:
+            seed_example_dof_criteria(dof_store)
+            seed_example_focus_criteria(focus_store)
+            seed_example_flatness_criteria(flatness_store)
+            seed_example_gantry_criteria(gantry_store)
+        outcome = run_c_class_pipeline(
+            MockScanCollector(),
+            dof_store,
+            focus_store,
+            flatness_store,
+            gantry_store,
+            store,
+            args.equipment_id,
+            max_scan_attempts=args.max_scan_attempts,
+        )
+        print(outcome.detail)
+        for item in outcome.results:
+            _print_result(item)
+        if outcome.escalated:
+            return 1
+        return 0 if outcome.all_passed else 1
     else:
         return 1
 

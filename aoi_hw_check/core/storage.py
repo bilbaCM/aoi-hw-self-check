@@ -34,6 +34,14 @@ class ResultStore(ABC):
         self, equipment_id: str, check_item: str
     ) -> list[dict[str, Any]]: ...
 
+    @abstractmethod
+    def record_scan_attempt(self, equipment_id: str, all_passed: bool) -> None:
+        """C분류 기준 시료 Scan 1회 시도를 기록한다 (재Scan 횟수 상한 판단에 사용)."""
+
+    @abstractmethod
+    def count_scan_attempts_since_last_pass(self, equipment_id: str) -> int:
+        """가장 최근 전 항목 PASS 이후(또는 PASS 이력이 없으면 전체) 시도 횟수를 센다."""
+
     def get_latest_results(self, equipment_id: str) -> dict[str, CheckResult]:
         """설비의 각 판정 항목별 가장 최근 결과만 모아 반환한다 (항목명 -> 결과)."""
         latest: dict[str, CheckResult] = {}
@@ -77,6 +85,16 @@ class SQLiteResultStore(ResultStore):
                     check_item TEXT NOT NULL,
                     snapshot TEXT NOT NULL,
                     created_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS c_class_scan_attempts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    equipment_id TEXT NOT NULL,
+                    all_passed INTEGER NOT NULL,
+                    attempted_at TEXT NOT NULL
                 )
                 """
             )
@@ -162,6 +180,46 @@ class SQLiteResultStore(ResultStore):
             {"snapshot": json.loads(row["snapshot"]), "created_at": row["created_at"]}
             for row in rows
         ]
+
+    def record_scan_attempt(self, equipment_id: str, all_passed: bool) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO c_class_scan_attempts (equipment_id, all_passed, attempted_at)
+                VALUES (?, ?, ?)
+                """,
+                (
+                    equipment_id,
+                    int(all_passed),
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+
+    def count_scan_attempts_since_last_pass(self, equipment_id: str) -> int:
+        with self._connect() as conn:
+            last_pass = conn.execute(
+                """
+                SELECT id FROM c_class_scan_attempts
+                WHERE equipment_id = ? AND all_passed = 1
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (equipment_id,),
+            ).fetchone()
+            if last_pass is None:
+                row = conn.execute(
+                    "SELECT COUNT(*) AS cnt FROM c_class_scan_attempts WHERE equipment_id = ?",
+                    (equipment_id,),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """
+                    SELECT COUNT(*) AS cnt FROM c_class_scan_attempts
+                    WHERE equipment_id = ? AND id > ?
+                    """,
+                    (equipment_id, last_pass["id"]),
+                ).fetchone()
+        return row["cnt"]
 
     @staticmethod
     def _row_to_result(row: sqlite3.Row) -> CheckResult:

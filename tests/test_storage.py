@@ -41,5 +41,35 @@ class BaselineHistoryTest(unittest.TestCase):
         self.assertIsNone(self.store.get_baseline("EQ02", CHECK_ITEM))
 
 
+class ScanAttemptTrackingTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.store = SQLiteResultStore(Path(self._tmpdir.name) / "test.sqlite3")
+
+    def tearDown(self) -> None:
+        self._tmpdir.cleanup()
+
+    def test_no_attempts_yet_counts_zero(self) -> None:
+        self.assertEqual(self.store.count_scan_attempts_since_last_pass("EQ01"), 0)
+
+    def test_failed_attempts_accumulate(self) -> None:
+        self.store.record_scan_attempt("EQ01", all_passed=False)
+        self.store.record_scan_attempt("EQ01", all_passed=False)
+
+        self.assertEqual(self.store.count_scan_attempts_since_last_pass("EQ01"), 2)
+
+    def test_count_resets_after_a_pass(self) -> None:
+        self.store.record_scan_attempt("EQ01", all_passed=False)
+        self.store.record_scan_attempt("EQ01", all_passed=True)
+        self.store.record_scan_attempt("EQ01", all_passed=False)
+
+        self.assertEqual(self.store.count_scan_attempts_since_last_pass("EQ01"), 1)
+
+    def test_attempts_are_isolated_per_equipment(self) -> None:
+        self.store.record_scan_attempt("EQ01", all_passed=False)
+
+        self.assertEqual(self.store.count_scan_attempts_since_last_pass("EQ02"), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
