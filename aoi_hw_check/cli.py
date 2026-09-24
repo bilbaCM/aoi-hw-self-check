@@ -41,6 +41,9 @@ from aoi_hw_check.checks.motion_tuning_check.runner import MockMotionTuningRunne
 from aoi_hw_check.checks.optical_comm_check.collector import MockOpticalCommCollector
 from aoi_hw_check.checks.optical_comm_check.judge import run_optical_comm_check
 from aoi_hw_check.checks.pc_check.collector import MockPCStateCollector
+from aoi_hw_check.checks.pc_check.example_criteria import (
+    seed_example_criteria as seed_example_pc_criteria,
+)
 from aoi_hw_check.checks.pc_check.judge import run_pc_check
 from aoi_hw_check.checks.single_unit_check.judge import run_single_unit_check
 from aoi_hw_check.checks.single_unit_check.runner import MockSingleUnitSequenceRunner
@@ -83,6 +86,7 @@ INTERLOCK_EXPECTED_SEQUENCE = [
 # run-all이 쓰는 기준(Criteria) 저장 파일 전부 — execute_motion_hw_check 등의
 # 하드코딩된 파일명과 동일하다. Gate 관리 화면(list_all_criteria)이 훑어보는 대상.
 CRITERIA_STORE_FILES = [
+    "pc_check_criteria.json",
     "motion_hw_check_criteria.json",
     "motion_tuning_check_criteria.json",
     "interlock_check_criteria.json",
@@ -175,6 +179,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="WMI로 실제 Windows PC 상태를 수집 (Windows 전용, 미지정 시 Mock 사용)",
     )
     pc_check.add_argument("--pc-config", default="config/windows_pc_check.example.json")
+    pc_check.add_argument("--criteria", default="pc_check_criteria.json")
+    pc_check.add_argument(
+        "--seed-example-criteria",
+        action="store_true",
+        help="개발/테스트용 예시 기준 범위를 등록한 뒤 실행 (실제 출하 DATA 아님)",
+    )
 
     motion_check = subparsers.add_parser("motion-hw-check", help="모션 H/W Check 실행")
     motion_check.add_argument("--equipment-id", required=True)
@@ -373,12 +383,15 @@ def _build_run_context(args: argparse.Namespace) -> _RunContext:
 
 
 def execute_pc_check(args: argparse.Namespace, ctx: _RunContext) -> CheckResult:
+    pc_criteria = JSONCriteriaStore("pc_check_criteria.json")
+    if args.seed_example_criteria:
+        seed_example_pc_criteria(pc_criteria)
     pc_collector = (
         WindowsPCStateCollector(create_wmi_client(), load_pc_check_config(args.pc_config))
         if args.use_wmi
         else MockPCStateCollector()
     )
-    return run_pc_check(pc_collector, ctx.store, args.equipment_id)
+    return run_pc_check(pc_collector, pc_criteria, ctx.store, args.equipment_id)
 
 
 def execute_motion_hw_check(args: argparse.Namespace, ctx: _RunContext) -> CheckResult:
@@ -614,12 +627,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "pc-check":
         store = SQLiteResultStore(args.db)
+        criteria_store = JSONCriteriaStore(args.criteria)
+        if args.seed_example_criteria:
+            seed_example_pc_criteria(criteria_store)
         collector = (
             WindowsPCStateCollector(create_wmi_client(), load_pc_check_config(args.pc_config))
             if args.use_wmi
             else MockPCStateCollector()
         )
-        result = run_pc_check(collector, store, args.equipment_id)
+        result = run_pc_check(collector, criteria_store, store, args.equipment_id)
     elif args.command == "motion-hw-check":
         store = SQLiteResultStore(args.db)
         criteria_store = JSONCriteriaStore(args.criteria)
