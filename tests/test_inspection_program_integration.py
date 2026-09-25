@@ -56,7 +56,7 @@ class TCPScanCollectorTest(unittest.TestCase):
                 "af_z_map": {
                     "pin_heights": [{"pin_id": "PIN1", "z_um": 100.0}],
                     "tracks": {
-                        "Micro": {
+                        "INS1": {
                             "samples": [
                                 {
                                     "x_mm": 0.0,
@@ -69,7 +69,7 @@ class TCPScanCollectorTest(unittest.TestCase):
                     },
                 },
                 "scan_images": {
-                    "focus_measures": {"Micro": 980.0},
+                    "focus_measures": {"INS1": 980.0},
                     "gantry_x_axis_samples": [
                         {"stage_position_mm": 0.0, "x_um": 0.0, "y_um": 0.0}
                     ],
@@ -86,8 +86,8 @@ class TCPScanCollectorTest(unittest.TestCase):
             scan_result = collector.run_reference_scan()
 
             self.assertEqual(scan_result.af_z_map.pin_heights[0].pin_id, "PIN1")
-            self.assertEqual(scan_result.af_z_map.tracks["Micro"].samples[0].z_um, 50.0)
-            self.assertEqual(scan_result.scan_images.focus_measures["Micro"], 980.0)
+            self.assertEqual(scan_result.af_z_map.tracks["INS1"].samples[0].z_um, 50.0)
+            self.assertEqual(scan_result.scan_images.focus_measures["INS1"], 980.0)
             self.assertEqual(len(scan_result.scan_images.gantry_x_axis_samples), 1)
         finally:
             connection.close()

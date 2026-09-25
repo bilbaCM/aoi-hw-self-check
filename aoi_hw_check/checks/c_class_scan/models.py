@@ -23,18 +23,20 @@ class AFZSample:
 
 @dataclass(frozen=True)
 class AFZTrack:
-    """광학계 1계통(Micro/Macro/계측)의 AF Z 추종 샘플 목록."""
+    """인스펙터 카메라 1대의 AF Z 추종 샘플 목록 — 인스펙터 PC 1대당 카메라 1대 기준이며,
+    카메라(인스펙터) 대수는 설비마다 다르다."""
 
-    subsystem: str
+    inspector_id: str
     samples: list[AFZSample] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
 class AFZMap:
-    """AF Z 추종 맵 — Stage PIN 높이, 계통별 Tilt/AFM Setting 판정의 공통 입력."""
+    """AF Z 추종 맵 — Stage PIN 높이, 인스펙터별 Tilt/AFM Setting 판정의 공통 입력."""
 
     pin_heights: list[PinHeightSample] = field(default_factory=list)
     tracks: dict[str, AFZTrack] = field(default_factory=dict)
+    """인스펙터 번호(예: "INS1") -> 그 카메라의 AFZTrack."""
 
 
 @dataclass(frozen=True)
@@ -51,6 +53,7 @@ class ScanImageSet:
     """같은 Scan에서 취득한 영상에서 산출한 값들 — Focus 판정, Gantry 직각도 판정의 입력."""
 
     focus_measures: dict[str, float] = field(default_factory=dict)
+    """인스펙터 번호(예: "INS1") -> 그 카메라의 Focus 측정값 (검사 프로그램이 이미 산출)."""
     gantry_x_axis_samples: list[CellCoordinateSample] = field(default_factory=list)
     gantry_y_axis_samples: list[CellCoordinateSample] = field(default_factory=list)
 

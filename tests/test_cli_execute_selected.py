@@ -110,7 +110,11 @@ class ExecuteSelectedTest(unittest.TestCase):
             [
                 ("pc_check", "PC 동작 Check"),
                 ("motion_hw_check", "모션 H/W Check"),
-                (C_CLASS_SCAN_KEY, "C분류 6항목 (Stage 평탄도·광학계·AFM·Gantry — 기준 시료 1회 Scan 공유)"),
+                (
+                    C_CLASS_SCAN_KEY,
+                    "C분류 (Stage 평탄도·광학계·AFM·Gantry — 기준 시료 1회 Scan 공유,"
+                    " 광학계는 인스펙터 카메라 대수만큼)",
+                ),
             ],
         )
         self.assertFalse(outcome.cancelled)

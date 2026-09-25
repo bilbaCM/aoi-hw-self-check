@@ -54,8 +54,8 @@ def _parse_scan_result(response: dict[str, Any]) -> ScanResult:
         for p in af_z_map_data.get("pin_heights", [])
     ]
     tracks = {
-        subsystem: AFZTrack(
-            subsystem=subsystem,
+        inspector_id: AFZTrack(
+            inspector_id=inspector_id,
             samples=[
                 AFZSample(
                     x_mm=s["x_mm"],
@@ -66,7 +66,7 @@ def _parse_scan_result(response: dict[str, Any]) -> ScanResult:
                 for s in track["samples"]
             ],
         )
-        for subsystem, track in af_z_map_data.get("tracks", {}).items()
+        for inspector_id, track in af_z_map_data.get("tracks", {}).items()
     }
     af_z_map = AFZMap(pin_heights=pin_heights, tracks=tracks)
 

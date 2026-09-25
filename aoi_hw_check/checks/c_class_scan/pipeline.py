@@ -32,7 +32,8 @@ def run_c_class_pipeline(
     equipment_id: str,
     max_scan_attempts: int = DEFAULT_MAX_SCAN_ATTEMPTS,
 ) -> CClassPipelineOutcome:
-    """기준 시료 1회 Scan으로 C분류 6개 항목을 함께 판정한다.
+    """기준 시료 1회 Scan으로 C분류 항목을 함께 판정한다 (평탄도·AFM·Gantry 3개 +
+    인스펙터 카메라별 광학계 상태 확인 — 카메라 대수는 설비마다 다르다).
 
     영상은 설비를 구동해야만 취득되고(Scan 1회 = 셋업 시간) 단독 취득이
     불가능하므로, 재Scan 횟수에 상한을 두어 NG 몇 건으로 셋업 시간이
@@ -53,7 +54,8 @@ def run_c_class_pipeline(
 
     scan_result = collector.run_reference_scan()
 
-    subsystems = sorted(
+    # 인스펙터(카메라) 번호 — 인스펙터 PC 1대당 카메라 1대 기준이며 대수는 설비마다 다르다.
+    inspector_ids = sorted(
         set(scan_result.af_z_map.tracks) | set(scan_result.scan_images.focus_measures)
     )
 
@@ -61,14 +63,14 @@ def run_c_class_pipeline(
         run_pin_pad_flatness_check(scan_result, flatness_criteria_store, store, equipment_id),
         *(
             run_optical_subsystem_check(
-                subsystem,
+                inspector_id,
                 scan_result,
                 dof_criteria_store,
                 focus_criteria_store,
                 store,
                 equipment_id,
             )
-            for subsystem in subsystems
+            for inspector_id in inspector_ids
         ),
         run_afm_setting_check(scan_result, dof_criteria_store, store, equipment_id),
         run_gantry_squareness_check(scan_result, gantry_criteria_store, store, equipment_id),

@@ -255,7 +255,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     c_class_scan = subparsers.add_parser(
         "c-class-scan",
-        help="C분류 6항목 실행 (기준 시료 1회 Scan을 공유하는 AF Z맵/스캔영상 파이프라인)",
+        help="C분류 항목 실행 (기준 시료 1회 Scan을 공유하는 AF Z맵/스캔영상 파이프라인)",
     )
     c_class_scan.add_argument("--equipment-id", required=True)
     c_class_scan.add_argument("--db", default="aoi_hw_check.sqlite3")
@@ -513,7 +513,10 @@ CHECK_ITEM_SPECS: list[tuple[str, str, Callable[[argparse.Namespace, _RunContext
     ("interlock_check", "설비 연동 동작 Test", execute_interlock_check),
 ]
 C_CLASS_SCAN_KEY = "c_class_scan"
-C_CLASS_SCAN_LABEL = "C분류 6항목 (Stage 평탄도·광학계·AFM·Gantry — 기준 시료 1회 Scan 공유)"
+C_CLASS_SCAN_LABEL = (
+    "C분류 (Stage 평탄도·광학계·AFM·Gantry — 기준 시료 1회 Scan 공유,"
+    " 광학계는 인스펙터 카메라 대수만큼)"
+)
 
 
 def execute_selected(

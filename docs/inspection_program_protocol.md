@@ -7,9 +7,11 @@ Sep 24, 2026
 
 ## 개요
 
-H/W Self-Check 자동화 프로그램(Python)이 판정하는 13개 항목 중 **광학 부품 동작·통신 확인**과 **C분류 6항목**(Stage PIN·PAD·Sensor 평탄도, Micro/Macro/계측 광학계 상태 확인, AFM Setting 상태 확인, 계측 Y축 Gantry 직각도)은 카메라·조명·AF 측정값이 필요합니다. 카메라·조명·AF는 C++ 검사 프로그램이 소유하고 있어 Python이 카메라 SDK를 직접 잡지 않고, 이 프로그램에 Self-Check 전용 요청을 보내는 방식을 전제로 설계했습니다.
+H/W Self-Check 자동화 프로그램(Python)이 판정하는 항목 중 **광학 부품 동작·통신 확인**과 **C분류**(Stage PIN·PAD·Sensor 평탄도, 인스펙터 카메라별 광학계 상태 확인, AFM Setting 상태 확인, 계측 Y축 Gantry 직각도)는 카메라·조명·AF 측정값이 필요합니다. 카메라·조명·AF는 C++ 검사 프로그램이 소유하고 있어 Python이 카메라 SDK를 직접 잡지 않고, 이 프로그램에 Self-Check 전용 요청을 보내는 방식을 전제로 설계했습니다.
 
-영상은 설비를 구동해야만 취득되고 단독 취득이 불가능하다는 제약 때문에, **기준 시료 1회 Scan의 결과(AF Z 추종 맵 + 스캔 영상)를 C분류 6항목이 함께 사용**합니다 — `run_reference_scan` 한 번 호출로 6개 항목의 판정에 필요한 데이터를 전부 받아옵니다.
+영상은 설비를 구동해야만 취득되고 단독 취득이 불가능하다는 제약 때문에, **기준 시료 1회 Scan의 결과(AF Z 추종 맵 + 스캔 영상)를 C분류 항목들이 함께 사용**합니다 — `run_reference_scan` 한 번 호출로 이 판정들에 필요한 데이터를 전부 받아옵니다.
+
+**인스펙터 카메라 구성**: 인스펙터 PC 1대당 카메라 1대가 기준이며, 카메라(인스펙터) 대수는 설비마다 다릅니다. 그래서 `tracks`/`focus_measures`의 키는 고정된 3개가 아니라 **그 설비에 실제로 존재하는 인스펙터 번호**(예: `"INS1"`, `"INS2"`, ... — 대수만큼)를 그대로 씁니다. Python 쪽은 이 키 목록을 그대로 읽어 "그 대수만큼" 광학계 상태 확인 항목을 만듭니다.
 
 **확인 필요(TBD)**: 지금 이런 Self-Check 전용 API가 이미 있는지, 없다면 새 포트를 열어줄 수 있는지 검사 프로그램 담당자 확인이 필요합니다. C# 제어 프로그램과 마찬가지로, 운영 중 쓰는 캡처 파이프라인과는 **별도 포트**를 권장합니다 — 생산 중 쓰는 채널과 진단/테스트 채널이 섞이지 않도록 하기 위함입니다.
 
@@ -30,12 +32,12 @@ C# 제어 프로그램 프로토콜과 동일한 전송 방식입니다 — Pyth
 | `type` | string | 메시지 종류. 아래 2개 요청 타입과 그에 대응하는 `_result` 응답 타입, 그리고 공통 `error` 타입 중 하나 |
 | `request_id` | string | 요청·응답을 짝짓는 문자열(UUID). **클라이언트(Python)가 요청 시 생성**하며, 서버(C++)는 응답에 요청에서 받은 값을 **그대로 동일하게** 돌려줘야 합니다. 값이 다르면 Python 쪽에서 프로토콜 동기화 오류로 처리합니다. |
 
-## 메시지 1: run_reference_scan — 기준 시료 1회 Scan (C분류 6항목 공유)
+## 메시지 1: run_reference_scan — 기준 시료 1회 Scan (C분류 공유)
 
-설비를 구동해 기준 시료를 1회 Scan하고, AF가 기록한 Z 추종 맵과 스캔 영상에서 산출한 값을 함께 돌려받습니다. 이 응답 하나로 아래 6개 항목을 전부 판정합니다.
+설비를 구동해 기준 시료를 1회 Scan하고, AF가 기록한 Z 추종 맵과 스캔 영상에서 산출한 값을 함께 돌려받습니다. 이 응답 하나로 아래 판정을 전부 합니다.
 
 - Stage PIN·PAD·Sensor 평탄도 (`pin_heights`)
-- Micro / Macro / 계측 광학계 상태 확인 — Focus + Tilt, 계통별 1항목 (`tracks`, `focus_measures`)
+- 인스펙터 카메라별 광학계 상태 확인 — Focus + Tilt, 카메라(인스펙터) 1대당 1항목, **대수는 설비마다 다름** (`tracks`, `focus_measures`)
 - AFM Setting 상태 확인 (`tracks`의 `beam_position_error_um`)
 - 계측 Y축 Gantry 직각도 (`gantry_x_axis_samples`, `gantry_y_axis_samples`)
 
@@ -57,16 +59,15 @@ C# 제어 프로그램 프로토콜과 동일한 전송 방식입니다 — Pyth
      {"pin_id": "PIN2", "z_um": 100.3}
    ],
    "tracks": {
-     "Micro": {"samples": [
+     "INS1": {"samples": [
        {"x_mm": 0.0, "y_mm": 0.0, "z_um": 50.0, "beam_position_error_um": 0.05},
        {"x_mm": 10.0, "y_mm": 0.0, "z_um": 50.1, "beam_position_error_um": 0.04}
      ]},
-     "Macro": {"samples": [ ... ]},
-     "계측": {"samples": [ ... ]}
+     "INS2": {"samples": [ ... ]}
    }
  },
  "scan_images": {
-   "focus_measures": {"Micro": 980.0, "Macro": 875.0, "계측": 910.0},
+   "focus_measures": {"INS1": 980.0, "INS2": 875.0},
    "gantry_x_axis_samples": [
      {"stage_position_mm": 0.0, "x_um": 0.0, "y_um": 0.0},
      {"stage_position_mm": 50.0, "x_um": 50.0, "y_um": 0.1}
@@ -82,23 +83,23 @@ C# 제어 프로그램 프로토콜과 동일한 전송 방식입니다 — Pyth
 | `pin_heights` | array | Stage PIN/PAD/Sensor 지점별 AF 측정 높이. **평탄도 판정에 최소 2개 이상 필요** — 이보다 적으면 NA 처리됩니다. |
 | `pin_heights[].pin_id` | string | PIN/PAD/Sensor 지점 식별자 |
 | `pin_heights[].z_um` | number | 그 지점의 AF 측정 높이(µm) |
-| `tracks` | object | 광학계 계통별(키: `"Micro"`, `"Macro"`, `"계측"`) AF Z 추종 샘플 목록 |
-| `tracks[계통].samples` | array | 그 계통의 AF Z 추종 샘플. **Tilt 판정(평면 피팅)에 최소 3개 이상, x/y가 한 직선 위에 있지 않도록 2차원으로 분포해야 함** — 한 방향으로만 찍으면 평면 방정식이 특이(singular)해져 계산할 수 없습니다. |
-| `tracks[계통].samples[].x_mm`, `y_mm` | number | 측정 위치 좌표(mm) |
-| `tracks[계통].samples[].z_um` | number | 그 위치의 AF 측정 높이(µm) — 계통별 Tilt(기울기) 판정에 사용 |
-| `tracks[계통].samples[].beam_position_error_um` | number | 그 위치의 AF Beam Position 추종 오차(µm) — AFM Setting 상태 확인(DOF의 1/3 이내)에 사용 |
+| `tracks` | object | 인스펙터 카메라별(키: 그 설비의 인스펙터 번호, 예: `"INS1"`, `"INS2"` — **대수만큼**) AF Z 추종 샘플 목록 |
+| `tracks[인스펙터].samples` | array | 그 카메라의 AF Z 추종 샘플. **Tilt 판정(평면 피팅)에 최소 3개 이상, x/y가 한 직선 위에 있지 않도록 2차원으로 분포해야 함** — 한 방향으로만 찍으면 평면 방정식이 특이(singular)해져 계산할 수 없습니다. |
+| `tracks[인스펙터].samples[].x_mm`, `y_mm` | number | 측정 위치 좌표(mm) |
+| `tracks[인스펙터].samples[].z_um` | number | 그 위치의 AF 측정 높이(µm) — 그 카메라의 Tilt(기울기) 판정에 사용 |
+| `tracks[인스펙터].samples[].beam_position_error_um` | number | 그 위치의 AF Beam Position 추종 오차(µm) — AFM Setting 상태 확인(DOF의 1/3 이내)에 사용 |
 
 ### `scan_images` — Focus 판정, Gantry 직각도 판정의 입력
 
 | 필드 | 타입 | 설명 |
 | --- | --- | --- |
-| `focus_measures` | object | 광학계 계통별(키: `"Micro"`, `"Macro"`, `"계측"`) Focus 측정값 1개(숫자, 단위 무관 — 이 설비의 최초 실행값을 기준 시료 값(baseline)으로 저장하고 이후 실행은 그 비율로 판정합니다) |
+| `focus_measures` | object | 인스펙터 카메라별(키: `tracks`와 동일한 인스펙터 번호) Focus 지수 1개 — **검사 프로그램이 이미 카메라별로 산출하는 그 포커스 지수를 그대로 전달**(숫자, 단위 무관 — 이 설비의 최초 실행값을 기준 시료 값(baseline)으로 저장하고 이후 실행은 그 비율로 판정합니다) |
 | `gantry_x_axis_samples` | array | 계측 Gantry X축 구동 중 다점 취득한 Cell 패턴 좌표. **직각도 판정에 축당 최소 3점 이상 필요**(2점 측정 금지 — 구간 직진도 오차를 직각도로 오인할 수 있어서입니다) |
 | `gantry_y_axis_samples` | array | 계측 Gantry Y축 구동 중 다점 취득한 Cell 패턴 좌표. 위와 동일한 최소 점수 |
 | `*_axis_samples[].stage_position_mm` | number | 그 샘플을 찍은 Stage 위치(mm) |
 | `*_axis_samples[].x_um`, `y_um` | number | 그 위치에서 취득한 Cell 패턴 좌표(µm) — X/Y 각 축에 최소자승 직선을 피팅해 두 직선의 사잇각을 90도와 비교합니다 |
 
-`tracks`와 `focus_measures`의 계통 키는 반드시 `"Micro"`, `"Macro"`, `"계측"` 3개를 그대로 써야 합니다(한글 "계측" 포함) — Python 쪽이 이 문자열을 그대로 키로 사용합니다.
+`tracks`와 `focus_measures`의 키는 그 설비에 **실제로 존재하는 인스펙터 번호와 정확히 일치**해야 합니다(두 필드가 같은 키 집합을 가리켜야 함) — Python 쪽은 이 키 목록을 그대로 읽어 "그 대수만큼" 광학계 상태 확인 항목을 만들기 때문에, 고정된 개수나 이름(예: 예전 안의 `"Micro"`/`"Macro"`/`"계측"`)을 가정하지 않습니다.
 
 ## 메시지 2: run_optical_comm_test — 광학 부품 동작·통신 확인
 

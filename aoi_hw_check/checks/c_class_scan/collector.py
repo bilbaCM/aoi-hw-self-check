@@ -12,7 +12,9 @@ from aoi_hw_check.checks.c_class_scan.models import (
     ScanResult,
 )
 
-_SUBSYSTEMS = ("Micro", "Macro", "계측")
+# Mock에서 흉내 낼 인스펙터 카메라 번호 — 실제 대수는 설비마다 다르며, 인스펙터
+# PC 1대당 카메라 1대 기준이다. 여기서는 대표로 3대를 가정한다.
+_INSPECTOR_IDS = ("INS1", "INS2", "INS3")
 
 
 class ScanCollector(ABC):
@@ -37,7 +39,7 @@ class MockScanCollector(ScanCollector):
 
     @staticmethod
     def _default_scan_result() -> ScanResult:
-        def flat_track(subsystem: str) -> AFZTrack:
+        def flat_track(inspector_id: str) -> AFZTrack:
             # x/y 둘 다 변화하는 2D 그리드로 샘플링한다 — 한 방향으로만 샘플링하면
             # (x,y) 투영이 한 직선 위에 놓여 평면 피팅 연립방정식이 특이(singular)해진다.
             samples = [
@@ -50,7 +52,7 @@ class MockScanCollector(ScanCollector):
                 for x in (0, 10, 20)
                 for y in (0, 10)
             ]
-            return AFZTrack(subsystem=subsystem, samples=samples)
+            return AFZTrack(inspector_id=inspector_id, samples=samples)
 
         af_z_map = AFZMap(
             pin_heights=[
@@ -59,7 +61,7 @@ class MockScanCollector(ScanCollector):
                 PinHeightSample("PIN3", 99.8),
                 PinHeightSample("PIN4", 100.1),
             ],
-            tracks={subsystem: flat_track(subsystem) for subsystem in _SUBSYSTEMS},
+            tracks={inspector_id: flat_track(inspector_id) for inspector_id in _INSPECTOR_IDS},
         )
 
         def axis_line(dx: float, dy: float) -> list[CellCoordinateSample]:
@@ -73,7 +75,7 @@ class MockScanCollector(ScanCollector):
             ]
 
         scan_images = ScanImageSet(
-            focus_measures={"Micro": 980.0, "Macro": 875.0, "계측": 910.0},
+            focus_measures={"INS1": 980.0, "INS2": 875.0, "INS3": 910.0},
             gantry_x_axis_samples=axis_line(dx=50.0, dy=0.0),
             gantry_y_axis_samples=axis_line(dx=0.0, dy=50.0),
         )

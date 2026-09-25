@@ -18,12 +18,12 @@ from aoi_hw_check.core.storage import SQLiteResultStore
 from aoi_hw_check.core.thresholds import JSONCriteriaStore
 
 
-def _track(subsystem: str, errors: list[float]) -> AFZTrack:
+def _track(inspector_id: str, errors: list[float]) -> AFZTrack:
     samples = [
         AFZSample(x_mm=float(i), y_mm=0.0, z_um=50.0, beam_position_error_um=e)
         for i, e in enumerate(errors)
     ]
-    return AFZTrack(subsystem=subsystem, samples=samples)
+    return AFZTrack(inspector_id=inspector_id, samples=samples)
 
 
 class AFMSettingCheckTest(unittest.TestCase):
@@ -37,7 +37,7 @@ class AFMSettingCheckTest(unittest.TestCase):
 
     def test_no_dof_criteria_yields_na(self) -> None:
         scan_result = ScanResult(
-            af_z_map=AFZMap(tracks={"Micro": _track("Micro", [0.1, 0.2])}),
+            af_z_map=AFZMap(tracks={"INS1": _track("INS1", [0.1, 0.2])}),
             scan_images=ScanImageSet(),
         )
 
@@ -46,9 +46,9 @@ class AFMSettingCheckTest(unittest.TestCase):
         self.assertEqual(result.verdict, Verdict.NA)
 
     def test_error_within_dof_third_passes(self) -> None:
-        self.dof_store.save_criteria(DOF_CHECK_ITEM, "Micro", 0.0, 3.0)  # 허용 1.0
+        self.dof_store.save_criteria(DOF_CHECK_ITEM, "INS1", 0.0, 3.0)  # 허용 1.0
         scan_result = ScanResult(
-            af_z_map=AFZMap(tracks={"Micro": _track("Micro", [0.5, 0.9])}),
+            af_z_map=AFZMap(tracks={"INS1": _track("INS1", [0.5, 0.9])}),
             scan_images=ScanImageSet(),
         )
 
@@ -57,16 +57,16 @@ class AFMSettingCheckTest(unittest.TestCase):
         self.assertEqual(result.verdict, Verdict.PASS)
 
     def test_error_exceeding_dof_third_fails(self) -> None:
-        self.dof_store.save_criteria(DOF_CHECK_ITEM, "Micro", 0.0, 3.0)  # 허용 1.0
+        self.dof_store.save_criteria(DOF_CHECK_ITEM, "INS1", 0.0, 3.0)  # 허용 1.0
         scan_result = ScanResult(
-            af_z_map=AFZMap(tracks={"Micro": _track("Micro", [0.5, 1.5])}),
+            af_z_map=AFZMap(tracks={"INS1": _track("INS1", [0.5, 1.5])}),
             scan_images=ScanImageSet(),
         )
 
         result = run_afm_setting_check(scan_result, self.dof_store, self.store, "EQ01")
 
         self.assertEqual(result.verdict, Verdict.FAIL)
-        self.assertEqual(result.deviation[0].field_path, "Micro")
+        self.assertEqual(result.deviation[0].field_path, "INS1")
         self.assertEqual(result.deviation[0].current_value, 1.5)
 
 
