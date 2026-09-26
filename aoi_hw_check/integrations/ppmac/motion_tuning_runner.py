@@ -6,8 +6,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from aoi_hw_check.checks.motion_tuning_check.judge import CHECK_ITEM
 from aoi_hw_check.checks.motion_tuning_check.models import MotionTuningState
 from aoi_hw_check.checks.motion_tuning_check.runner import MotionTuningRunner
+from aoi_hw_check.core.thresholds import CriteriaStore
 from aoi_hw_check.integrations.ppmac.connection import PmacAsciiConnection
 
 
@@ -23,6 +25,10 @@ class TuningMoveSpec:
     settle_hold_ms: float
     poll_interval_ms: float
     timeout_ms: float
+    tolerance_variable: str | None = None
+    """PPMAC 커미셔닝 시 이미 설정된 그 축의 위치 허용오차 PMAC 글로벌 변수
+    (예: "Motor[1].InPosBand"). 등록돼 있으면 동종 설비 없이도
+    position_deviation_um의 절대 판정 기준으로 쓸 수 있다 (미설정 시 None)."""
 
 
 def load_move_specs(path: str | Path) -> dict[str, TuningMoveSpec]:
@@ -33,6 +39,32 @@ def load_move_specs(path: str | Path) -> dict[str, TuningMoveSpec]:
         for axis_id, spec in data.items()
         if not axis_id.startswith("_")
     }
+
+
+def sync_position_tolerance_criteria(
+    connection: PmacAsciiConnection,
+    move_specs: dict[str, TuningMoveSpec],
+    criteria_store: CriteriaStore,
+) -> dict[str, float]:
+    """PPMAC 커미셔닝 시 이미 설정된 축별 위치 허용오차(tolerance_variable)를
+    읽어, 모션 Tuning의 position_deviation_um 절대 기준으로 등록한다.
+
+    동종 설비가 아직 없어도(설비 1대뿐이어도) 그 축 자체에 이미 설정된
+    허용오차로 즉시 판정할 수 있게 하기 위함이다. 오버슈트·정착시간은
+    PPMAC이 실시간으로 들고 있는 값이 아니라 커미셔닝 리포트에만 남는
+    값이라 여기서는 다루지 않는다 — CriteriaStore에 직접 등록해야 한다.
+    tolerance_variable을 설정하지 않은 축은 건너뛴다.
+    """
+    registered: dict[str, float] = {}
+    for axis_id, spec in move_specs.items():
+        if not spec.tolerance_variable:
+            continue
+        tolerance_um = connection.query(spec.tolerance_variable)
+        criteria_store.save_criteria(
+            CHECK_ITEM, f"{axis_id}.position_deviation_um", 0.0, tolerance_um
+        )
+        registered[axis_id] = tolerance_um
+    return registered
 
 
 class PPMACMotionTuningRunner(MotionTuningRunner):

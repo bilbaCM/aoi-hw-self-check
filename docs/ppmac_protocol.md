@@ -105,6 +105,7 @@ field 이름 자체(`encoder_count` 등)는 Python 코드가 강제하는 고정
 | `settle_hold_ms` | 허용치 이내를 유지해야 정착으로 인정하는 시간(ms) |
 | `poll_interval_ms` | 위치 폴링 주기(ms) |
 | `timeout_ms` | 정착을 못 하면 포기하는 타임아웃(ms) |
+| `tolerance_variable` | (선택) 그 축의 커미셔닝 시 이미 설정된 위치 허용오차 PMAC 변수명(예: `Motor[1].InPosBand`). 등록해두면 `sync-ppmac-tuning-criteria` 명령이 이 값을 읽어 동종 설비 없이도 위치편차 판정에 쓸 절대 기준으로 자동 등록합니다. 없으면 `null`. |
 
 두 파일 모두 `_comment` 키를 제외한 나머지가 실제 값으로 채워져야 합니다 — 지금은 형식만 보여주는 TBD 예시입니다.
 

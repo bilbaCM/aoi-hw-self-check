@@ -1,5 +1,5 @@
 {
-  "_comment": "TBD 예시 - 실제 Motor 번호/좌표 단위/속도/공차는 설비 PPMAC 설정에 맞춰 교체 필요",
+  "_comment": "TBD 예시 - 실제 Motor 번호/좌표 단위/속도/공차는 설비 PPMAC 설정에 맞춰 교체 필요. tolerance_variable은 그 축의 커미셔닝 시 이미 설정된 위치 허용오차 변수(예: InPosBand) — 없으면 null로 두면 됨(sync-ppmac-tuning-criteria가 건너뜀).",
   "X": {
     "motor": 1,
     "position_variable": "Motor[1].ActPos",
@@ -8,7 +8,8 @@
     "settle_tolerance": 2.0,
     "settle_hold_ms": 100.0,
     "poll_interval_ms": 20.0,
-    "timeout_ms": 2000.0
+    "timeout_ms": 2000.0,
+    "tolerance_variable": "Motor[1].InPosBand"
   },
   "Y": {
     "motor": 2,
@@ -18,7 +19,8 @@
     "settle_tolerance": 2.0,
     "settle_hold_ms": 100.0,
     "poll_interval_ms": 20.0,
-    "timeout_ms": 2000.0
+    "timeout_ms": 2000.0,
+    "tolerance_variable": "Motor[2].InPosBand"
   },
   "Z": {
     "motor": 3,
@@ -28,6 +30,7 @@
     "settle_tolerance": 2.0,
     "settle_hold_ms": 100.0,
     "poll_interval_ms": 20.0,
-    "timeout_ms": 2000.0
+    "timeout_ms": 2000.0,
+    "tolerance_variable": "Motor[3].InPosBand"
   }
 }

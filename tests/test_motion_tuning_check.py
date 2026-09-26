@@ -87,6 +87,47 @@ class MotionTuningCheckTest(unittest.TestCase):
 
         self.assertEqual(result.verdict, Verdict.PASS)
 
+    def test_absolute_criteria_passes_a_single_equipment_with_no_peers(self) -> None:
+        # 동종 설비가 없어도(1대뿐), 축별 절대 기준(예: PPMAC 커미셔닝 값)이
+        # 등록돼 있으면 그걸로 판정할 수 있다.
+        self.criteria_store.save_criteria(CHECK_ITEM, "X.position_deviation_um", 0.0, 2.0)
+
+        result = run_motion_tuning_check(
+            FixedRunner(_state(1.0)), self.criteria_store, self.store, "EQ01"
+        )
+
+        self.assertEqual(result.verdict, Verdict.PASS)
+        self.assertEqual(result.deviation, [])
+
+    def test_absolute_criteria_fails_a_single_equipment_out_of_range(self) -> None:
+        self.criteria_store.save_criteria(CHECK_ITEM, "X.position_deviation_um", 0.0, 2.0)
+
+        result = run_motion_tuning_check(
+            FixedRunner(_state(5.0)), self.criteria_store, self.store, "EQ01"
+        )
+
+        self.assertEqual(result.verdict, Verdict.FAIL)
+        self.assertEqual(result.deviation[0].field_path, "X.position_deviation_um")
+        self.assertEqual(result.deviation[0].current_value, 5.0)
+
+    def test_peer_comparison_is_preferred_over_absolute_criteria_when_both_available(
+        self,
+    ) -> None:
+        # 허용 배수(동종 설비 비교) 기준이 등록돼 있고 peer도 충분하면, 절대
+        # 기준이 같이 등록돼 있어도 peer 비교 쪽을 우선 사용한다.
+        seed_example_criteria(self.criteria_store)  # 허용 배수 1.5x
+        self.criteria_store.save_criteria(CHECK_ITEM, "X.position_deviation_um", 0.0, 100.0)
+        run_motion_tuning_check(FixedRunner(_state(1.0)), self.criteria_store, self.store, "EQ01")
+
+        # EQ02는 EQ01(최량값 1.0)의 3배 -> 절대 기준(100.0)으로는 PASS겠지만
+        # peer 비교(1.5x 허용) 기준으로 FAIL이어야 한다.
+        result = run_motion_tuning_check(
+            FixedRunner(_state(3.0)), self.criteria_store, self.store, "EQ02"
+        )
+
+        self.assertEqual(result.verdict, Verdict.FAIL)
+        self.assertIn("동종 설비 최량값", result.deviation[0].baseline_value)
+
     def test_measurement_is_recorded_into_cross_equipment_history(self) -> None:
         run_motion_tuning_check(FixedRunner(_state(1.0)), self.criteria_store, self.store, "EQ01")
 

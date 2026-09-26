@@ -22,6 +22,11 @@ def run_motion_tuning_check(
     쌓아 "동종 설비 비교 저장소"로 쓰고, 그 이력에서 계산한 최량값(작을수록
     좋음)을 비교 기준으로 삼는다. 얼마나 벗어나면 FAIL인지의 허용 배수만
     CriteriaStore에서 metric별로 로드한다.
+
+    다만 동종 설비가 아직 없거나(1대뿐) 허용 배수가 등록 안 된 필드는,
+    CriteriaStore에 "축.metric" 키로 등록된 절대 기준(예: PPMAC 커미셔닝
+    시 이미 설정된 위치 허용오차 — `sync_position_tolerance_criteria`)이
+    있으면 그걸로 대신 판정한다. 둘 다 없으면 그 필드는 판정에서 제외된다.
     """
     state = runner.run_tuning_sequence()
     current_snapshot = state.to_flat_dict()
@@ -35,36 +40,50 @@ def run_motion_tuning_check(
     for key, value in current_snapshot.items():
         metric = key.split(".", 1)[1]
         peer_values = [snap[key] for snap in peer_snapshots.values() if key in snap]
-        if len(peer_values) < _MIN_PEERS_FOR_COMPARISON:
+        ratio_tolerance = criteria_store.get_criteria(CHECK_ITEM, metric)
+
+        if len(peer_values) >= _MIN_PEERS_FOR_COMPARISON and ratio_tolerance is not None:
+            best_value = min(peer_values)
+            if best_value <= 0:
+                continue
+
+            evaluated += 1
+            ratio = value / best_value
+            if ratio > ratio_tolerance.max_value:
+                deviations.append(
+                    FieldMismatch(
+                        field_path=key,
+                        baseline_value=(
+                            f"<= {ratio_tolerance.max_value}x 동종 설비 최량값({best_value:.3f})"
+                        ),
+                        current_value=round(value, 3),
+                    )
+                )
             continue
 
-        best_value = min(peer_values)
-        tolerance = criteria_store.get_criteria(CHECK_ITEM, metric)
-        if tolerance is None or best_value <= 0:
+        absolute = criteria_store.get_criteria(CHECK_ITEM, key)
+        if absolute is None:
             continue
 
         evaluated += 1
-        ratio = value / best_value
-        if ratio > tolerance.max_value:
+        if not (absolute.min_value <= value <= absolute.max_value):
             deviations.append(
                 FieldMismatch(
                     field_path=key,
-                    baseline_value=(
-                        f"<= {tolerance.max_value}x 동종 설비 최량값({best_value:.3f})"
-                    ),
+                    baseline_value=f"[{absolute.min_value}, {absolute.max_value}] (절대 기준)",
                     current_value=round(value, 3),
                 )
             )
 
     if evaluated == 0:
         verdict = Verdict.NA
-        detail = "동종 설비 비교 데이터(2대 이상) 또는 허용 배수 기준이 부족해 판정 불가"
+        detail = "동종 설비 비교 데이터(2대 이상)·허용 배수·절대 기준이 모두 부족해 판정 불가"
     elif deviations:
         verdict = Verdict.FAIL
-        detail = f"동종 설비 최량값 대비 편차 큰 항목 {len(deviations)}/{evaluated}건"
+        detail = f"동종 설비 최량값 또는 절대 기준 대비 편차 큰 항목 {len(deviations)}/{evaluated}건"
     else:
         verdict = Verdict.PASS
-        detail = f"전 {evaluated}건 동종 설비 최량값 대비 허용 범위 이내"
+        detail = f"전 {evaluated}건 동종 설비 최량값 또는 절대 기준 대비 허용 범위 이내"
 
     result = CheckResult(
         equipment_id=equipment_id,

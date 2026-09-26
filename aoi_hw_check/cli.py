@@ -69,6 +69,7 @@ from aoi_hw_check.integrations.ppmac.motion_hw_collector import PPMACMotionHWCol
 from aoi_hw_check.integrations.ppmac.motion_tuning_runner import (
     PPMACMotionTuningRunner,
     load_move_specs,
+    sync_position_tolerance_criteria,
 )
 from aoi_hw_check.integrations.windows_pc.collector import (
     WindowsPCStateCollector,
@@ -328,6 +329,24 @@ def build_parser() -> argparse.ArgumentParser:
     criteria_gate.add_argument(
         "--target", required=True, choices=[status.value for status in GateStatus]
     )
+
+    sync_ppmac_tuning_criteria = subparsers.add_parser(
+        "sync-ppmac-tuning-criteria",
+        help=(
+            "PPMAC 커미셔닝 시 이미 설정된 축별 위치 허용오차를 읽어 모션 Tuning의"
+            " 절대 기준으로 등록 (동종 설비 없이도 판정 가능해짐)"
+        ),
+    )
+    sync_ppmac_tuning_criteria.add_argument(
+        "--criteria", default="motion_tuning_check_criteria.json"
+    )
+    sync_ppmac_tuning_criteria.add_argument(
+        "--move-specs", default="config/ppmac_tuning_moves.example.json"
+    )
+    sync_ppmac_tuning_criteria.add_argument(
+        "--ppmac-host", required=True, help="PPMAC LAN 호스트 (Mock 불가 — 실기 연결 필수)"
+    )
+    sync_ppmac_tuning_criteria.add_argument("--ppmac-port", type=int, default=1025)
 
     return parser
 
@@ -775,6 +794,18 @@ def main(argv: list[str] | None = None) -> int:
             f"{criteria.gate_status.value} (v{criteria.version}, "
             f"[{criteria.min_value}, {criteria.max_value}])"
         )
+        return 0
+    elif args.command == "sync-ppmac-tuning-criteria":
+        move_specs = load_move_specs(args.move_specs)
+        criteria_store = JSONCriteriaStore(args.criteria)
+        connection = PmacAsciiConnection(args.ppmac_host, args.ppmac_port)
+        registered = sync_position_tolerance_criteria(connection, move_specs, criteria_store)
+        connection.close()
+        if not registered:
+            print("tolerance_variable이 설정된 축이 없어 동기화할 항목이 없습니다.")
+        else:
+            for axis_id, tolerance_um in registered.items():
+                print(f"{axis_id}.position_deviation_um <= {tolerance_um} 로 등록했습니다.")
         return 0
     else:
         return 1

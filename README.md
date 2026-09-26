@@ -170,6 +170,10 @@ python3 -m aoi_hw_check.cli action-items --equipment-id EQ01
 python3 -m aoi_hw_check.cli criteria-gate \
   --store motion_hw_check_criteria.json \
   --check-item "모션 H/W Check" --key "X.encoder_count" --target TRIAL
+
+# PPMAC에 이미 설정된 축별 위치 허용오차를 모션 Tuning의 절대 기준으로 동기화
+# (동종 설비 없이도 판정 가능해짐 — Mock 불가, 실기 연결 필수)
+python3 -m aoi_hw_check.cli sync-ppmac-tuning-criteria --ppmac-host 192.168.0.10
 ```
 
 각 서브커맨드의 전체 옵션은 `--help`로 확인합니다:

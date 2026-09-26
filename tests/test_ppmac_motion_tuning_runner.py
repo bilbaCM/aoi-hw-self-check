@@ -4,10 +4,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from aoi_hw_check.checks.motion_tuning_check.judge import CHECK_ITEM
+from aoi_hw_check.core.thresholds import JSONCriteriaStore
 from aoi_hw_check.integrations.ppmac.motion_tuning_runner import (
     PPMACMotionTuningRunner,
     TuningMoveSpec,
     load_move_specs,
+    sync_position_tolerance_criteria,
 )
 
 
@@ -149,6 +152,110 @@ class LoadMoveSpecsTest(unittest.TestCase):
 
         self.assertNotIn("_comment", specs)
         self.assertIn("X", specs)
+        self.assertEqual(specs["X"].tolerance_variable, "Motor[1].InPosBand")
+
+    def test_tolerance_variable_defaults_to_none_when_omitted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "moves.json"
+            path.write_text(
+                """
+                {
+                  "X": {
+                    "motor": 1,
+                    "position_variable": "Motor[1].ActPos",
+                    "start_position": 0.0,
+                    "target_position": 100.0,
+                    "settle_tolerance": 1.0,
+                    "settle_hold_ms": 50.0,
+                    "poll_interval_ms": 10.0,
+                    "timeout_ms": 1000.0
+                  }
+                }
+                """,
+                encoding="utf-8",
+            )
+
+            specs = load_move_specs(path)
+
+            self.assertIsNone(specs["X"].tolerance_variable)
+
+
+class _FakeToleranceConnection:
+    def __init__(self, values: dict[str, float]):
+        self._values = values
+
+    def query(self, variable: str) -> float:
+        return self._values[variable]
+
+
+class SyncPositionToleranceCriteriaTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.criteria_store = JSONCriteriaStore(Path(self._tmpdir.name) / "criteria.json")
+
+    def tearDown(self) -> None:
+        self._tmpdir.cleanup()
+
+    def test_registers_absolute_criteria_from_ppmac_tolerance_variables(self) -> None:
+        connection = _FakeToleranceConnection(
+            {"Motor[1].InPosBand": 2.0, "Motor[2].InPosBand": 3.5}
+        )
+        move_specs = {
+            "X": TuningMoveSpec(
+                motor=1,
+                position_variable="Motor[1].ActPos",
+                start_position=0.0,
+                target_position=100.0,
+                settle_tolerance=1.0,
+                settle_hold_ms=50.0,
+                poll_interval_ms=10.0,
+                timeout_ms=1000.0,
+                tolerance_variable="Motor[1].InPosBand",
+            ),
+            "Y": TuningMoveSpec(
+                motor=2,
+                position_variable="Motor[2].ActPos",
+                start_position=0.0,
+                target_position=100.0,
+                settle_tolerance=1.0,
+                settle_hold_ms=50.0,
+                poll_interval_ms=10.0,
+                timeout_ms=1000.0,
+                tolerance_variable="Motor[2].InPosBand",
+            ),
+        }
+
+        registered = sync_position_tolerance_criteria(
+            connection, move_specs, self.criteria_store  # type: ignore[arg-type]
+        )
+
+        self.assertEqual(registered, {"X": 2.0, "Y": 3.5})
+        x_criteria = self.criteria_store.get_criteria(CHECK_ITEM, "X.position_deviation_um")
+        self.assertIsNotNone(x_criteria)
+        assert x_criteria is not None
+        self.assertEqual(x_criteria.max_value, 2.0)
+
+    def test_axes_without_tolerance_variable_are_skipped(self) -> None:
+        connection = _FakeToleranceConnection({})
+        move_specs = {
+            "Z": TuningMoveSpec(
+                motor=3,
+                position_variable="Motor[3].ActPos",
+                start_position=0.0,
+                target_position=100.0,
+                settle_tolerance=1.0,
+                settle_hold_ms=50.0,
+                poll_interval_ms=10.0,
+                timeout_ms=1000.0,
+            )
+        }
+
+        registered = sync_position_tolerance_criteria(
+            connection, move_specs, self.criteria_store  # type: ignore[arg-type]
+        )
+
+        self.assertEqual(registered, {})
+        self.assertIsNone(self.criteria_store.get_criteria(CHECK_ITEM, "Z.position_deviation_um"))
 
 
 if __name__ == "__main__":
