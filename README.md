@@ -145,6 +145,20 @@ GENERATED → TRIAL → OPTIMIZED → VALIDATED → APPLIED 순서로 한 단계
 상태로 등록됩니다 — 값이 바뀌면 기존 Gate 단계는 유지되지 않고 처음부터
 다시 검증을 거쳐야 한다는 원칙(위 "설계 원칙" 참고) 그대로입니다.
 
+**Python 설치 없이 실행 파일(.exe)로**: 설비 PC에 Python을 설치하고 관리하는
+부담 없이 쓸 수 있도록, 저장소에 push될 때마다 GitHub Actions가 Windows용
+단일 실행 파일을 자동으로 빌드합니다 — 저장소의 **Actions** 탭에서 최신
+`Build Windows executable` 실행을 열어 `AOI_HW_SelfCheck-windows` 아티팩트를
+내려받으면 `AOI_HW_SelfCheck_GUI.exe`·`AOI_HW_SelfCheck_CLI.exe`와
+`config/` 예시 파일이 한 폴더에 들어 있습니다. 압축을 풀고 GUI는
+`AOI_HW_SelfCheck_GUI.exe`를 더블클릭, CLI는 명령 프롬프트에서
+`AOI_HW_SelfCheck_CLI.exe run-all --equipment-id EQ01 --seed-example-criteria --supervised`처럼
+`python -m aoi_hw_check.cli` 대신 그대로 실행하면 됩니다. WMI 연동(`--use-wmi`)에
+필요한 `wmi`/`pywin32`도 이미 빌드에 포함돼 있어 추가 설치가 필요 없습니다.
+직접 빌드하려면 `pip install pyinstaller` 후
+`pyinstaller --onefile --windowed --paths . packaging/run_gui.py`를 실행하세요
+(워크플로 정의: `.github/workflows/build-windows-exe.yml`).
+
 **Windows에서 콘솔로 한 번에 실행**: 저장소 루트의 `run.bat`을 더블클릭하면
 설비 ID를 물어본 뒤 13개 항목을 전부 실행하고 조치 대상 목록까지 보여줍니다
 (Mock 모드). 콘솔 창 제목과 배너에 프로그램 이름·버전이 표시되고,

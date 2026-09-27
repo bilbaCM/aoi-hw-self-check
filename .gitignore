@@ -5,3 +5,8 @@ __pycache__/
 *.egg-info/
 reports/
 /*_criteria.json
+
+# PyInstaller 빌드 산출물 (로컬에서 packaging/ 스크립트로 빌드할 때 생성됨)
+/build/
+/dist/
+/*.spec

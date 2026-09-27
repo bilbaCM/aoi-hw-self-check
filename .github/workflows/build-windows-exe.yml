@@ -1,0 +1,35 @@
+name: Build Windows executable
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller wmi pywin32
+          pip install -e .
+      - name: Build GUI executable
+        run: pyinstaller --onefile --windowed --name AOI_HW_SelfCheck_GUI --paths . packaging/run_gui.py
+      - name: Build CLI executable
+        run: pyinstaller --onefile --console --name AOI_HW_SelfCheck_CLI --paths . packaging/run_cli.py
+      - name: Assemble distribution folder
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist_package
+          Copy-Item dist/AOI_HW_SelfCheck_GUI.exe dist_package/
+          Copy-Item dist/AOI_HW_SelfCheck_CLI.exe dist_package/
+          Copy-Item -Recurse config dist_package/config
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AOI_HW_SelfCheck-windows
+          path: dist_package/
