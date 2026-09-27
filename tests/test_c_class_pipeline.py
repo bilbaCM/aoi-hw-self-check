@@ -12,6 +12,7 @@ from aoi_hw_check.checks.c_class_scan.example_criteria import (
     seed_example_gantry_criteria,
 )
 from aoi_hw_check.checks.c_class_scan.pipeline import run_c_class_pipeline
+from aoi_hw_check.checks.pin_pad_flatness_check.judge import CHECK_ITEM as FLATNESS_CHECK_ITEM
 from aoi_hw_check.core.storage import SQLiteResultStore
 from aoi_hw_check.core.thresholds import JSONCriteriaStore
 
@@ -63,8 +64,21 @@ class CClassPipelineTest(unittest.TestCase):
 
         self.assertTrue(outcome.all_passed, outcome.results)
 
+    def test_na_only_rounds_do_not_consume_scan_attempt_budget(self) -> None:
+        # criteria 미등록 상태 -> 전부 NA(FAIL 없음) -> 설비 결함이 아니라 설정
+        # 미비일 뿐이므로, 상한 횟수를 넘겨도 에스컬레이션되면 안 된다.
+        for _ in range(5):
+            outcome = self._run(max_scan_attempts=3)
+            self.assertFalse(outcome.escalated)
+            self.assertFalse(outcome.all_passed)
+
     def test_scan_attempt_limit_blocks_further_auto_scans(self) -> None:
-        # criteria 미등록 상태 -> all_passed는 항상 False (기준 미등록으로 NA)
+        # 너무 엄격한 평탄도 기준을 등록해 실제 FAIL을 유도한다
+        # (Mock PIN 높이 편차 0.5um > 0.1um)
+        self.flatness_store.save_criteria(
+            FLATNESS_CHECK_ITEM, "pin_height_deviation_um", 0.0, 0.1
+        )
+
         for _ in range(3):
             outcome = self._run(max_scan_attempts=3)
             self.assertFalse(outcome.escalated)

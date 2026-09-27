@@ -117,6 +117,29 @@ class OpticalSubsystemCheckTest(unittest.TestCase):
             [m.field_path for m in result.deviation], ["tilt_focus_deviation_um"]
         )
 
+    def test_collinear_samples_yield_na_instead_of_crashing(self) -> None:
+        # (x, y)가 전부 y=0인 한 직선 위 -> 평면 피팅이 불가능한 조건.
+        # 실기 AF 스캔 경로가 우연히 비직선 조건을 못 채워도 죽지 않고
+        # NA로 처리돼야 한다.
+        collinear_track = AFZTrack(
+            inspector_id="INS1",
+            samples=[
+                AFZSample(x_mm=0.0, y_mm=0.0, z_um=50.0, beam_position_error_um=0.0),
+                AFZSample(x_mm=5.0, y_mm=0.0, z_um=52.0, beam_position_error_um=0.0),
+                AFZSample(x_mm=10.0, y_mm=0.0, z_um=54.0, beam_position_error_um=0.0),
+            ],
+        )
+        scan_result = ScanResult(
+            af_z_map=AFZMap(tracks={"INS1": collinear_track}),
+            scan_images=ScanImageSet(focus_measures={"INS1": 1000.0}),
+        )
+
+        result = run_optical_subsystem_check(
+            "INS1", scan_result, self.dof_store, self.focus_store, self.store, "EQ01"
+        )
+
+        self.assertEqual(result.verdict, Verdict.NA)
+
     def test_focus_failure_fails_even_if_tilt_passes(self) -> None:
         self.dof_store.save_criteria(DOF_CHECK_ITEM, "INS1", 0.0, 5.0)
         run_optical_subsystem_check(

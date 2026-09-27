@@ -77,7 +77,12 @@ def run_c_class_pipeline(
     ]
 
     all_passed = all(r.verdict == Verdict.PASS for r in results)
-    store.record_scan_attempt(equipment_id, all_passed)
+    has_fail = any(r.verdict == Verdict.FAIL for r in results)
+    # NA만 있고 FAIL은 없는 회차(예: 기준값 미등록)는 재Scan 시도로 기록하지
+    # 않는다 — 설비 결함이 아니라 설정 미비일 뿐이라, 재Scan 상한을 깎아먹어
+    # 작업자 개입으로 잘못 에스컬레이션되는 걸 막기 위함이다.
+    if all_passed or has_fail:
+        store.record_scan_attempt(equipment_id, all_passed)
 
     ng_count = sum(1 for r in results if r.verdict != Verdict.PASS)
     detail = (

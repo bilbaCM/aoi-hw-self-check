@@ -28,7 +28,12 @@ def _evaluate_tilt(
         return Verdict.NA, [], "Tilt: AF Z 트랙 데이터 부족"
 
     points = [(s.x_mm, s.y_mm, s.z_um) for s in track.samples]
-    a, b, c = fit_plane(points)
+    try:
+        a, b, c = fit_plane(points)
+    except ValueError:
+        # 샘플이 (거의) 한 직선 위에 있어 평면을 피팅할 수 없는 경우 — 실기
+        # AF 스캔 경로가 우연히 비직선 조건을 못 채우면 발생할 수 있다.
+        return Verdict.NA, [], "Tilt: 샘플이 한 직선 위에 있어 평면 피팅 불가"
     magnitude = tilt_magnitude_deg(a, b)
     direction = tilt_direction_deg(a, b)
     focus_deviation_um = plane_z_range(a, b, c, points)
